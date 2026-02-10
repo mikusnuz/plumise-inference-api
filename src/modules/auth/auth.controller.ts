@@ -3,6 +3,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { WalletAuthGuard } from './auth.guard';
 import { CurrentUser } from './decorators/current-user.decorator';
+import { NonceRequestDto, VerifySignatureDto } from './dto/nonce.dto';
 
 @ApiTags('auth')
 @Controller('api/v1/auth')
@@ -11,8 +12,8 @@ export class AuthController {
 
   @Post('nonce')
   @ApiOperation({ summary: 'Get nonce for wallet signing' })
-  getNonce(@Body('address') address: string) {
-    const nonce = this.authService.generateNonce(address);
+  getNonce(@Body() dto: NonceRequestDto) {
+    const nonce = this.authService.generateNonce(dto.address);
     return {
       nonce,
       message: `Sign this message to authenticate with Plumise Inference API.\n\nNonce: ${nonce}`,
@@ -21,11 +22,8 @@ export class AuthController {
 
   @Post('verify')
   @ApiOperation({ summary: 'Verify signature and get JWT token' })
-  async verify(
-    @Body('address') address: string,
-    @Body('signature') signature: string,
-  ) {
-    const token = await this.authService.verifySignature(address, signature);
+  async verify(@Body() dto: VerifySignatureDto) {
+    const token = await this.authService.verifySignature(dto.address, dto.signature);
     return { token };
   }
 

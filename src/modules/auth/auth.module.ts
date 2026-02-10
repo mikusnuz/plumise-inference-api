@@ -10,8 +10,10 @@ import { ChainModule } from '../chain/chain.module';
   imports: [
     PassportModule,
     JwtModule.register({
-      secret: process.env.JWT_SECRET || 'your-jwt-secret',
-      signOptions: { expiresIn: '24h' },
+      secret: process.env.JWT_SECRET || (() => {
+        throw new Error('JWT_SECRET must be set in environment variables');
+      })(),
+      signOptions: { expiresIn: process.env.JWT_EXPIRATION as any || '24h' },
     }),
     ChainModule,
   ],

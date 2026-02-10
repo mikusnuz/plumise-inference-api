@@ -1,25 +1,29 @@
-import { IsString, IsNumber, IsOptional, IsBoolean, IsArray, ValidateNested, Min, Max } from 'class-validator';
+import { IsString, IsNumber, IsOptional, IsBoolean, IsArray, ValidateNested, Min, Max, MaxLength, IsIn } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class ChatMessageDto {
   @ApiProperty({ enum: ['system', 'user', 'assistant'] })
   @IsString()
+  @IsIn(['system', 'user', 'assistant'])
   role: 'system' | 'user' | 'assistant';
 
   @ApiProperty()
   @IsString()
+  @MaxLength(32000)
   content: string;
 }
 
 export class InferenceRequestDto {
   @ApiProperty({ example: 'meta-llama/Llama-3.1-8B' })
   @IsString()
+  @MaxLength(100)
   model: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(32000)
   prompt?: string;
 
   @ApiPropertyOptional({ type: [ChatMessageDto] })

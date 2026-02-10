@@ -16,7 +16,10 @@ export class ReportController {
   constructor(private readonly reportService: ReportService) {}
 
   private verifyApiKey(apiKey: string | undefined) {
-    const expectedKey = process.env.ORACLE_API_KEY || 'your-oracle-api-key';
+    const expectedKey = process.env.ORACLE_API_KEY;
+    if (!expectedKey) {
+      throw new UnauthorizedException('Oracle API key not configured');
+    }
     if (!apiKey || apiKey !== expectedKey) {
       throw new UnauthorizedException('Invalid API key');
     }
