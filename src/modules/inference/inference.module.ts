@@ -3,8 +3,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { InferenceController } from './inference.controller';
 import { InferenceService } from './inference.service';
 import { InferenceGateway } from './inference.gateway';
-import { PetalsClientService } from './petals-client.service';
-import { MetricsReporterService } from './metrics-reporter.service';
+import { NodeRouterService } from './node-router.service';
 import { ModelModule } from '../model/model.module';
 import { RateLimitModule } from '../rate-limit/rate-limit.module';
 import { PaymentModule } from '../payment/payment.module';
@@ -25,8 +24,7 @@ import { PaymentModule } from '../payment/payment.module';
   providers: [
     InferenceService,
     InferenceGateway,
-    PetalsClientService,
-    MetricsReporterService,
+    NodeRouterService,
   ],
   exports: [InferenceService],
 })

@@ -3,8 +3,7 @@ import { ModelService } from '../model/model.service';
 import { RateLimitService } from '../rate-limit/rate-limit.service';
 import { InferenceRequest, InferenceResponse, ChatMessage } from '../../common/interfaces';
 import { generateRequestId, estimateTokens } from '../../common/utils';
-import { PetalsClientService } from './petals-client.service';
-import { MetricsReporterService } from './metrics-reporter.service';
+import { NodeRouterService } from './node-router.service';
 
 @Injectable()
 export class InferenceService {
@@ -13,8 +12,7 @@ export class InferenceService {
   constructor(
     private readonly modelService: ModelService,
     private readonly rateLimitService: RateLimitService,
-    private readonly petalsClient: PetalsClientService,
-    private readonly metricsReporter: MetricsReporterService,
+    private readonly nodeRouter: NodeRouterService,
   ) {}
 
   async runInference(
@@ -63,7 +61,7 @@ export class InferenceService {
     const promptTokens = estimateTokens(promptText);
 
     try {
-      const petalsResponse = await this.petalsClient.generate({
+      const petalsResponse = await this.nodeRouter.forwardRequest({
         inputs: promptText,
         parameters: {
           max_new_tokens: request.max_tokens,
@@ -78,7 +76,6 @@ export class InferenceService {
       const completionTokens = petalsResponse.num_tokens || estimateTokens(completionText);
       const totalTokens = promptTokens + completionTokens;
 
-      this.metricsReporter.recordInference(totalTokens, latencyMs);
       this.rateLimitService.incrementUsage(userAddress);
 
       this.logger.log(
@@ -168,7 +165,7 @@ export class InferenceService {
     try {
       let completedText = '';
 
-      for await (const chunk of this.petalsClient.generateStream({
+      for await (const chunk of this.nodeRouter.forwardStreamRequest({
         inputs: promptText,
         parameters: {
           max_new_tokens: request.max_tokens,
@@ -185,7 +182,6 @@ export class InferenceService {
       const completionTokens = estimateTokens(completedText);
       const totalTokens = promptTokens + completionTokens;
 
-      this.metricsReporter.recordInference(totalTokens, latencyMs);
       this.rateLimitService.incrementUsage(userAddress);
 
       this.logger.log(

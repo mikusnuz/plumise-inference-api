@@ -1,6 +1,6 @@
 # Plumise Inference API
 
-Decentralized AI inference gateway for Plumise chain. Routes inference requests from clients to the distributed Petals network with authentication, payment verification, and rate limiting.
+Decentralized AI inference API Gateway for Plumise chain. Routes inference requests from clients to distributed Petals inference nodes with authentication, payment verification, rate limiting, and automatic failover.
 
 ## Features
 
@@ -10,16 +10,17 @@ Decentralized AI inference gateway for Plumise chain. Routes inference requests 
 - **OpenAI-compatible API**: Standard inference and chat completion endpoints
 - **WebSocket Support**: Real-time streaming inference via Socket.IO
 - **Model Registry**: Track available models and serving nodes
-- **Oracle Integration**: Receive metrics from Petals nodes
-- **Petals Network Integration**: Real distributed inference via Petals HTTP API
-- **Metrics Reporting**: Automatic token counting and latency tracking to Oracle
+- **Node Discovery**: Automatic node discovery from Oracle or static config
+- **Intelligent Routing**: Round-robin load balancing with health checks and failover
+- **High Availability**: Automatic retry to healthy nodes on failure
 - **Docker Support**: Production-ready containerization
 
 ## Architecture
 
 ### Modules
 
-- **InferenceModule**: Core inference routing to Petals network
+- **InferenceModule**: Core inference routing with NodeRouter
+- **NodeRouterService**: Intelligent request routing with health checks and failover
 - **AuthModule**: Wallet signature verification and JWT authentication
 - **PaymentModule**: On-chain payment verification for Pro tier
 - **RateLimitModule**: Tier-based rate limiting
@@ -45,26 +46,27 @@ CHAIN_RPC_URL=http://localhost:26902
 CHAIN_WS_URL=ws://localhost:26912
 CHAIN_ID=41956
 
-PETALS_API_URL=http://localhost:31330
+# Node Discovery (either Oracle or static list)
 ORACLE_API_URL=http://localhost:15481
-ORACLE_API_KEY=your-oracle-api-key
+NODE_URLS=http://localhost:31330,http://192.168.0.200:31330
 
-PRIVATE_KEY=your-private-key-for-signing
+# Rate Limiting
+FREE_TIER_LIMIT=10
+FREE_TIER_MAX_TOKENS=2048
+PRO_TIER_MAX_TOKENS=4096
 ```
 
 **Important**:
-- `PRIVATE_KEY` is used to sign metrics before reporting to Oracle
-- Petals server must be running and accessible at `PETALS_API_URL`
-- Use `npm run test:petals` to verify Petals connection
+- `ORACLE_API_URL`: Optional. Gateway fetches active node list from Oracle
+- `NODE_URLS`: Comma-separated list of static Petals node URLs (fallback)
+- At least one of `ORACLE_API_URL` or `NODE_URLS` must be configured
+- Gateway automatically performs health checks and routes to healthy nodes
 
 ## Running
 
 ### Development
 
 ```bash
-# Test Petals connection first
-npm run test:petals
-
 # Start in development mode
 npm run start:dev
 ```
@@ -100,17 +102,24 @@ GET  /api/v1/auth/me           - Get user profile
 ### Inference
 
 ```
-POST /api/v1/inference         - Run text completion
-POST /api/v1/inference/chat    - Run chat completion
-GET  /api/v1/inference/stream  - Stream inference via SSE
-WS   /ws/inference             - WebSocket streaming
+POST /api/v1/inference              - Run text completion
+POST /api/v1/inference/chat         - Run chat completion
+GET  /api/v1/inference/stream       - Stream inference via SSE
+WS   /ws/inference                  - WebSocket streaming
+```
+
+### Nodes
+
+```
+GET  /api/v1/nodes                  - List active inference nodes
+GET  /api/v1/nodes/:address/stats   - Get node statistics
 ```
 
 ### Models
 
 ```
-GET  /api/v1/models            - List available models
-GET  /api/v1/models/:id        - Get model details
+GET  /api/v1/models                 - List available models
+GET  /api/v1/models/:id             - Get model details
 ```
 
 ### Health
@@ -233,17 +242,17 @@ socket.on('inference_complete', () => {
 1. **Client Authentication**: Users authenticate with wallet signature to get JWT token
 2. **Inference Request**: Client sends inference request with JWT authorization
 3. **Rate Limiting**: API checks user's tier and rate limit
-4. **Petals API Call**: InferenceService forwards request to Petals network
-5. **Response Processing**: Parse Petals response, count tokens, measure latency
-6. **Metrics Reporting**: Background job reports aggregated metrics to Oracle every 60s
+4. **Node Selection**: NodeRouter selects healthy node using round-robin
+5. **Request Forwarding**: Forward request to selected Petals node
+6. **Failover**: If node fails, automatically retry with next healthy node
 7. **Response Return**: Send formatted OpenAI-compatible response to client
 
 ### Key Components
 
-- **PetalsClientService**: HTTP client wrapper for Petals API calls
-- **MetricsReporterService**: Collects inference metrics and reports to Oracle
-- **InferenceService**: Core business logic for inference routing
+- **NodeRouterService**: Node discovery, health checks, and intelligent routing
+- **InferenceService**: Core business logic for inference orchestration
 - **InferenceGateway**: WebSocket gateway for real-time streaming
+- **AuthGuard & RateLimitGuard**: Request validation and rate limiting
 
 ## Development
 
