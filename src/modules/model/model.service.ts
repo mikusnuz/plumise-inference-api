@@ -13,6 +13,15 @@ export class ModelService implements OnModuleInit {
   private initializeModels() {
     const modelsList: ModelInfo[] = [
       {
+        id: 'bigscience/bloom-560m',
+        name: 'BLOOM 560M',
+        description: 'BigScience BLOOM 560M parameter model (for development)',
+        max_tokens: 2048,
+        tier: 'free',
+        nodes: 1,
+        status: 'available',
+      },
+      {
         id: 'meta-llama/Llama-3.1-8B',
         name: 'Llama 3.1 8B',
         description: 'Meta Llama 3.1 8B parameter model',

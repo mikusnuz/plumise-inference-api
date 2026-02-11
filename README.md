@@ -11,6 +11,9 @@ Decentralized AI inference gateway for Plumise chain. Routes inference requests 
 - **WebSocket Support**: Real-time streaming inference via Socket.IO
 - **Model Registry**: Track available models and serving nodes
 - **Oracle Integration**: Receive metrics from Petals nodes
+- **Petals Network Integration**: Real distributed inference via Petals HTTP API
+- **Metrics Reporting**: Automatic token counting and latency tracking to Oracle
+- **Docker Support**: Production-ready containerization
 
 ## Architecture
 
@@ -43,18 +46,45 @@ CHAIN_WS_URL=ws://localhost:26912
 CHAIN_ID=41956
 
 PETALS_API_URL=http://localhost:31330
+ORACLE_API_URL=http://localhost:15481
 ORACLE_API_KEY=your-oracle-api-key
+
+PRIVATE_KEY=your-private-key-for-signing
 ```
+
+**Important**:
+- `PRIVATE_KEY` is used to sign metrics before reporting to Oracle
+- Petals server must be running and accessible at `PETALS_API_URL`
+- Use `npm run test:petals` to verify Petals connection
 
 ## Running
 
-```bash
-# Development
-npm run start:dev
+### Development
 
-# Production
+```bash
+# Test Petals connection first
+npm run test:petals
+
+# Start in development mode
+npm run start:dev
+```
+
+### Production
+
+```bash
+# Using npm
 npm run build
 npm run start:prod
+
+# Using Docker
+npm run docker:build
+npm run docker:up
+
+# View logs
+npm run docker:logs
+
+# Stop
+npm run docker:down
 ```
 
 ## API Endpoints
@@ -127,7 +157,7 @@ const response = await fetch('http://localhost:3200/api/v1/inference', {
     'Content-Type': 'application/json',
   },
   body: JSON.stringify({
-    model: 'meta-llama/Llama-3.1-8B',
+    model: 'bigscience/bloom-560m',  // or 'meta-llama/Llama-3.1-8B'
     prompt: 'What is the capital of France?',
     max_tokens: 512,
     temperature: 0.7,
@@ -190,13 +220,30 @@ socket.on('inference_complete', () => {
 
 ### Free Tier
 - Rate limit: 10 requests/hour
-- Models: Llama 3.1 8B, Mistral 7B
+- Models: BLOOM 560M, Llama 3.1 8B, Mistral 7B
 - Max tokens: 2048
 
 ### Pro Tier
 - Rate limit: Unlimited
 - Models: All (including Llama 3.1 70B)
 - Max tokens: 4096
+
+## How It Works
+
+1. **Client Authentication**: Users authenticate with wallet signature to get JWT token
+2. **Inference Request**: Client sends inference request with JWT authorization
+3. **Rate Limiting**: API checks user's tier and rate limit
+4. **Petals API Call**: InferenceService forwards request to Petals network
+5. **Response Processing**: Parse Petals response, count tokens, measure latency
+6. **Metrics Reporting**: Background job reports aggregated metrics to Oracle every 60s
+7. **Response Return**: Send formatted OpenAI-compatible response to client
+
+### Key Components
+
+- **PetalsClientService**: HTTP client wrapper for Petals API calls
+- **MetricsReporterService**: Collects inference metrics and reports to Oracle
+- **InferenceService**: Core business logic for inference routing
+- **InferenceGateway**: WebSocket gateway for real-time streaming
 
 ## Development
 
