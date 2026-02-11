@@ -4,13 +4,12 @@ import axios from 'axios';
 import { ethers } from 'ethers';
 
 interface MetricsPayload {
-  agent: string;
-  processed_tokens: number;
-  avg_latency_ms: number;
-  uptime_seconds: number;
-  tasks_completed: number;
-  timestamp: number;
-  signature?: string;
+  wallet: string;
+  tokensProcessed: number;
+  avgLatencyMs: number;
+  requestCount: number;
+  uptimeSeconds: number;
+  signature: string;
 }
 
 @Injectable()
@@ -57,24 +56,31 @@ export class MetricsReporterService {
       return;
     }
 
-    try {
-      const payload: MetricsPayload = {
-        agent: this.wallet.address,
-        processed_tokens: this.totalTokens,
-        avg_latency_ms: this.totalLatencyMs / this.totalRequests,
-        uptime_seconds: Math.floor((Date.now() - this.startTime) / 1000),
-        tasks_completed: this.totalRequests,
-        timestamp: Math.floor(Date.now() / 1000),
-      };
+    const tokensProcessed = this.totalTokens;
+    const requestCount = this.totalRequests;
+    const avgLatencyMs = this.totalLatencyMs / this.totalRequests;
+    const uptimeSeconds = Math.floor((Date.now() - this.startTime) / 1000);
 
+    try {
       const message = JSON.stringify({
-        agent: payload.agent,
-        processed_tokens: payload.processed_tokens,
-        timestamp: payload.timestamp,
+        wallet: this.wallet.address.toLowerCase(),
+        tokensProcessed,
+        avgLatencyMs,
+        requestCount,
+        uptimeSeconds,
+        timestamp: Math.floor(Date.now() / 1000),
       });
 
       const signature = await this.wallet.signMessage(message);
-      payload.signature = signature;
+
+      const payload: MetricsPayload = {
+        wallet: this.wallet.address,
+        tokensProcessed,
+        avgLatencyMs,
+        requestCount,
+        uptimeSeconds,
+        signature,
+      };
 
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
@@ -84,25 +90,53 @@ export class MetricsReporterService {
         headers['x-api-key'] = this.oracleApiKey;
       }
 
-      await axios.post(`${this.oracleApiUrl}/api/metrics`, payload, {
-        headers,
-        timeout: 5000,
-      });
-
-      this.logger.log(
-        `Reported metrics: ${this.totalRequests} requests, ` +
-        `${this.totalTokens} tokens, ` +
-        `${(payload.avg_latency_ms).toFixed(2)}ms avg latency`,
+      const response = await axios.post(
+        `${this.oracleApiUrl}/api/v1/metrics/report`,
+        payload,
+        {
+          headers,
+          timeout: 5000,
+        },
       );
+
+      if (response.status === 200 || response.status === 201) {
+        this.logger.log(
+          `Metrics reported successfully: ${requestCount} requests, ` +
+          `${tokensProcessed} tokens, ${avgLatencyMs.toFixed(2)}ms avg latency`,
+        );
+
+        this.totalTokens = 0;
+        this.totalRequests = 0;
+        this.totalLatencyMs = 0;
+        this.logger.debug('Metrics counters reset after successful report');
+      } else {
+        this.logger.warn(
+          `Unexpected response status ${response.status}, metrics not reset`,
+        );
+      }
     } catch (error) {
       if (axios.isAxiosError(error)) {
         if (error.code === 'ECONNREFUSED') {
-          this.logger.debug('Oracle API not available, skipping metrics report');
+          this.logger.warn(
+            'Oracle API unreachable (ECONNREFUSED), will retry next interval. ' +
+            `Current accumulated: ${requestCount} requests, ${tokensProcessed} tokens`,
+          );
+        } else if (error.response) {
+          this.logger.error(
+            `Failed to report metrics: HTTP ${error.response.status} - ${error.response.data?.message || error.message}. ` +
+            `Metrics not reset, will retry next interval.`,
+          );
         } else {
-          this.logger.error(`Failed to report metrics: ${error.message}`);
+          this.logger.error(
+            `Failed to report metrics: ${error.message}. Metrics not reset.`,
+          );
         }
+      } else if (error instanceof Error) {
+        this.logger.error(
+          `Signature generation or metrics report failed: ${error.message}. Skipping this cycle.`,
+        );
       } else {
-        this.logger.error('Failed to report metrics', error);
+        this.logger.error('Unknown error during metrics reporting', error);
       }
     }
   }
