@@ -23,10 +23,24 @@ This is a **team-operated service** that provides an OpenAI-compatible API to en
 | (wallet  |      | (this service)     |    |                   +------------------+
 |  auth)   |      |                    |    +-- route --------> | Petals Node B    |
 +----------+      | - Auth (JWT)       |    |                   +------------------+
-                  | - Rate Limiting    |    +-- route --------> | Petals Node C    |
-                  | - Node Router      |                        +------------------+
-                  | - Metrics Reporter |
-                  +--------------------+
+     |            | - Rate Limiting    |    +-- route --------> | Petals Node C    |
+     |            | - Payment (PLM)    |                        +------------------+
+     |            | - Node Router      |
+     | deposit    | - Metrics Reporter |
+     |            +--------+-----------+
+     v                     | useCredits
++----+------------------+  |
+| InferencePayment      |<-+
+| (on-chain contract)   |
+| - Free/Pro tiers      |
+| - PLM credit system   |
++----------+------------+
+           |
+           v
++----------+------------+
+| FoundationTreasury    |
+| (fee collection)      |
++------------------------+
 ```
 
 For the full ecosystem architecture, see [plumise-petals/docs/ARCHITECTURE.md](https://github.com/mikusnuz/plumise-petals/blob/main/docs/ARCHITECTURE.md).
@@ -75,6 +89,7 @@ Copy `.env.example` to `.env` and configure:
 | `FREE_TIER_LIMIT` | `10` | Free tier rate limit (requests/hour) |
 | `FREE_TIER_MAX_TOKENS` | `2048` | Free tier max tokens per request |
 | `PRO_TIER_MAX_TOKENS` | `4096` | Pro tier max tokens per request |
+| `INFERENCE_PAYMENT_ADDRESS` | -- | InferencePayment contract address (enables PLM payment) |
 | `CORS_ORIGINS` | `http://localhost:3000` | Allowed CORS origins |
 
 **Important**:
@@ -265,17 +280,51 @@ socket.on('inference_complete', () => {
 - Models: All (including Llama 3.1 70B)
 - Max tokens: 4096
 
+## PLM Payment System
+
+The Inference API integrates with the **InferencePayment** smart contract to enable on-chain payment for AI inference.
+
+### How Payment Works
+
+1. **Deposit**: Users deposit PLM into the InferencePayment contract to unlock Pro tier
+2. **Inference**: When a Pro user makes an inference request, the gateway calls `useCredits()` on the contract to deduct tokens based on usage (0.001 PLM per 1000 tokens by default)
+3. **Fee Collection**: Deducted PLM is forwarded to the Foundation Treasury (0x1001)
+4. **Balance Check**: Users can check their balance and tier status via the `/api/v1/auth/me` endpoint
+
+### Tier Determination
+
+| Tier | Requirement | Access |
+|------|-------------|--------|
+| **Free** | No deposit needed | 10 req/hour, basic models, 2048 max tokens |
+| **Pro** | Minimum 100 PLM deposit | Unlimited requests, all models, 4096 max tokens |
+
+Pro tier is determined on-chain by querying `getUserTier()` on the InferencePayment contract. The gateway caches tier status for 5 minutes.
+
+### Payment Endpoints
+
+```
+GET  /api/v1/payment/balance    - Get PLM balance and tier (requires JWT)
+POST /api/v1/payment/deposit    - Instructions for depositing PLM (requires JWT)
+```
+
+> **Note**: Deposits and withdrawals are done directly on-chain via the InferencePayment contract. The API only reads balance/tier state.
+
+### Configuration
+
+Set `INFERENCE_PAYMENT_ADDRESS` in `.env` to enable the payment system. Without this address, the gateway falls back to the legacy tier system (all users are Free tier).
+
 ## How It Works
 
 1. **Client Authentication**: Users authenticate with wallet signature to get JWT token
 2. **Inference Request**: Client sends inference request with JWT authorization
-3. **Rate Limiting**: API checks user's tier and rate limit
+3. **Tier & Rate Limiting**: API checks user's tier (via InferencePayment contract) and rate limit
 4. **Node Selection**: NodeRouter selects healthy node using round-robin
 5. **Request Forwarding**: Forward request to selected Petals node
 6. **Failover**: If node fails, automatically retry with next healthy node (up to 3 retries)
 7. **Response Processing**: Parse Petals response, count tokens, measure latency
-8. **Metrics Reporting**: Background job reports aggregated metrics to Oracle every 60s
-9. **Response Return**: Send formatted OpenAI-compatible response to client
+8. **Credit Deduction**: For Pro tier users, deduct PLM credits via `useCredits()` on-chain
+9. **Metrics Reporting**: Background job reports aggregated metrics to Oracle every 60s
+10. **Response Return**: Send formatted OpenAI-compatible response to client
 
 ## Module Structure
 
