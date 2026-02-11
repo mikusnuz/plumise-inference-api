@@ -2,6 +2,7 @@ export const CHAIN_CONFIG = {
   chainId: parseInt(process.env.CHAIN_ID || '41956'),
   rpcUrl: process.env.CHAIN_RPC_URL || 'http://localhost:26902',
   wsUrl: process.env.CHAIN_WS_URL || 'ws://localhost:26912',
+  gatewayPrivateKey: process.env.GATEWAY_PRIVATE_KEY || '',
   contracts: {
     agentRegistry: process.env.AGENT_REGISTRY_ADDRESS || '',
     rewardPool: process.env.REWARD_POOL_ADDRESS || '0x1000',

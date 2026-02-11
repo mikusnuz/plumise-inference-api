@@ -1,6 +1,7 @@
 import { Injectable, Logger, BadRequestException, ServiceUnavailableException } from '@nestjs/common';
 import { ModelService } from '../model/model.service';
 import { RateLimitService } from '../rate-limit/rate-limit.service';
+import { PaymentService } from '../payment/payment.service';
 import { InferenceRequest, InferenceResponse, ChatMessage } from '../../common/interfaces';
 import { generateRequestId, estimateTokens } from '../../common/utils';
 import { NodeRouterService } from './node-router.service';
@@ -13,6 +14,7 @@ export class InferenceService {
     private readonly modelService: ModelService,
     private readonly rateLimitService: RateLimitService,
     private readonly nodeRouter: NodeRouterService,
+    private readonly paymentService: PaymentService,
   ) {}
 
   async runInference(
@@ -77,6 +79,13 @@ export class InferenceService {
       const totalTokens = promptTokens + completionTokens;
 
       this.rateLimitService.incrementUsage(userAddress);
+
+      if (tier === 'pro') {
+        const deducted = await this.paymentService.deductCredits(userAddress, totalTokens);
+        if (!deducted) {
+          this.logger.warn(`Failed to deduct credits for ${userAddress}, but request succeeded`);
+        }
+      }
 
       this.logger.log(
         `Inference ${requestId} completed: ${totalTokens} tokens, ${latencyMs}ms`,
@@ -183,6 +192,13 @@ export class InferenceService {
       const totalTokens = promptTokens + completionTokens;
 
       this.rateLimitService.incrementUsage(userAddress);
+
+      if (tier === 'pro') {
+        const deducted = await this.paymentService.deductCredits(userAddress, totalTokens);
+        if (!deducted) {
+          this.logger.warn(`Failed to deduct credits for ${userAddress}, but request succeeded`);
+        }
+      }
 
       this.logger.log(
         `Streaming inference ${requestId} completed: ${totalTokens} tokens, ${latencyMs}ms`,
