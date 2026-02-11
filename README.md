@@ -90,6 +90,7 @@ Copy `.env.example` to `.env` and configure:
 | `FREE_TIER_MAX_TOKENS` | `2048` | Free tier max tokens per request |
 | `PRO_TIER_MAX_TOKENS` | `4096` | Pro tier max tokens per request |
 | `INFERENCE_PAYMENT_ADDRESS` | -- | InferencePayment contract address (enables PLM payment) |
+| `OPENAI_COMPAT_API_KEY` | -- | Optional API key for `/v1/chat/completions` and `/v1/models` (if unset, no auth required) |
 | `CORS_ORIGINS` | `http://localhost:3000` | Allowed CORS origins |
 
 **Important**:
@@ -143,6 +144,15 @@ POST /api/v1/inference/chat         - Run chat completion (requires JWT)
 GET  /api/v1/inference/stream       - Stream inference via SSE (requires JWT)
 WS   /ws/inference                  - WebSocket streaming (requires JWT)
 ```
+
+### OpenAI-Compatible Endpoints
+
+```
+POST /v1/chat/completions           - OpenAI-compatible chat completions (API key or no auth)
+GET  /v1/models                     - List models in OpenAI format (API key or no auth)
+```
+
+These endpoints are designed for tools like LibreChat, LangChain, or any OpenAI-compatible client. Configure `OPENAI_COMPAT_API_KEY` in `.env` to enable simple Bearer token authentication, or leave it unset to allow unauthenticated access (for internal services).
 
 ### Nodes
 
@@ -266,6 +276,69 @@ socket.on('inference_complete', () => {
   console.log('\nDone!');
   socket.close();
 });
+```
+
+### 5. OpenAI-Compatible Chat Completions
+
+```javascript
+// If OPENAI_COMPAT_API_KEY is set in .env
+const response = await fetch('http://localhost:3200/v1/chat/completions', {
+  method: 'POST',
+  headers: {
+    'Authorization': 'Bearer YOUR_OPENAI_COMPAT_API_KEY',
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    model: 'bigscience/bloom-560m',
+    messages: [
+      { role: 'system', content: 'You are a helpful assistant.' },
+      { role: 'user', content: 'Explain quantum computing in simple terms.' },
+    ],
+    max_tokens: 512,
+    temperature: 0.7,
+  }),
+}).then(r => r.json());
+
+console.log(response.choices[0].message.content);
+
+// If OPENAI_COMPAT_API_KEY is not set (no auth required)
+const response = await fetch('http://localhost:3200/v1/chat/completions', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    model: 'bigscience/bloom-560m',
+    messages: [
+      { role: 'user', content: 'Hello!' },
+    ],
+  }),
+}).then(r => r.json());
+```
+
+### 6. Using with LibreChat or OpenAI SDK
+
+```bash
+# Set as OpenAI base URL
+export OPENAI_API_BASE=http://localhost:3200/v1
+export OPENAI_API_KEY=YOUR_OPENAI_COMPAT_API_KEY  # Or omit if not required
+```
+
+```python
+# Python with openai library
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:3200/v1",
+    api_key="YOUR_OPENAI_COMPAT_API_KEY"  # Or any string if not required
+)
+
+response = client.chat.completions.create(
+    model="bigscience/bloom-560m",
+    messages=[
+        {"role": "user", "content": "What is AI?"}
+    ]
+)
+
+print(response.choices[0].message.content)
 ```
 
 ## Tiers

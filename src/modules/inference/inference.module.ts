@@ -4,6 +4,7 @@ import { InferenceController } from './inference.controller';
 import { InferenceService } from './inference.service';
 import { InferenceGateway } from './inference.gateway';
 import { NodeRouterService } from './node-router.service';
+import { OpenAICompatController } from './openai-compat.controller';
 import { ModelModule } from '../model/model.module';
 import { RateLimitModule } from '../rate-limit/rate-limit.module';
 import { PaymentModule } from '../payment/payment.module';
@@ -20,7 +21,7 @@ import { PaymentModule } from '../payment/payment.module';
       signOptions: { expiresIn: process.env.JWT_EXPIRATION as any || '24h' },
     }),
   ],
-  controllers: [InferenceController],
+  controllers: [InferenceController, OpenAICompatController],
   providers: [
     InferenceService,
     InferenceGateway,

@@ -75,6 +75,7 @@ npm run start:dev
 | `FREE_TIER_LIMIT` | `10` | Free 티어 속도 제한 (요청/시간) |
 | `FREE_TIER_MAX_TOKENS` | `2048` | Free 티어 요청당 최대 토큰 |
 | `PRO_TIER_MAX_TOKENS` | `4096` | Pro 티어 요청당 최대 토큰 |
+| `OPENAI_COMPAT_API_KEY` | -- | `/v1/chat/completions`, `/v1/models` 엔드포인트용 선택적 API 키 (설정하지 않으면 인증 불필요) |
 | `CORS_ORIGINS` | `http://localhost:3000` | 허용 CORS 오리진 |
 
 **중요**:
@@ -128,6 +129,15 @@ POST /api/v1/inference/chat         - 채팅 완성 실행 (JWT 필요)
 GET  /api/v1/inference/stream       - SSE를 통한 스트리밍 추론 (JWT 필요)
 WS   /ws/inference                  - WebSocket 스트리밍 (JWT 필요)
 ```
+
+### OpenAI 호환 엔드포인트
+
+```
+POST /v1/chat/completions           - OpenAI 호환 채팅 완성 (API 키 또는 인증 없음)
+GET  /v1/models                     - OpenAI 형식 모델 목록 (API 키 또는 인증 없음)
+```
+
+LibreChat, LangChain 등 OpenAI 호환 클라이언트에서 사용할 수 있도록 설계되었습니다. `.env`에 `OPENAI_COMPAT_API_KEY`를 설정하면 간단한 Bearer 토큰 인증이 활성화되고, 설정하지 않으면 인증 없이 접근할 수 있습니다 (내부 서비스용).
 
 ### 노드
 
@@ -251,6 +261,69 @@ socket.on('inference_complete', () => {
   console.log('\n완료!');
   socket.close();
 });
+```
+
+### 5. OpenAI 호환 채팅 완성
+
+```javascript
+// .env에 OPENAI_COMPAT_API_KEY가 설정된 경우
+const response = await fetch('http://localhost:3200/v1/chat/completions', {
+  method: 'POST',
+  headers: {
+    'Authorization': 'Bearer YOUR_OPENAI_COMPAT_API_KEY',
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    model: 'bigscience/bloom-560m',
+    messages: [
+      { role: 'system', content: '당신은 친절한 AI 어시스턴트입니다.' },
+      { role: 'user', content: '양자 컴퓨팅을 쉽게 설명해주세요.' },
+    ],
+    max_tokens: 512,
+    temperature: 0.7,
+  }),
+}).then(r => r.json());
+
+console.log(response.choices[0].message.content);
+
+// OPENAI_COMPAT_API_KEY가 설정되지 않은 경우 (인증 불필요)
+const response = await fetch('http://localhost:3200/v1/chat/completions', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    model: 'bigscience/bloom-560m',
+    messages: [
+      { role: 'user', content: '안녕하세요!' },
+    ],
+  }),
+}).then(r => r.json());
+```
+
+### 6. LibreChat 또는 OpenAI SDK 사용
+
+```bash
+# OpenAI base URL로 설정
+export OPENAI_API_BASE=http://localhost:3200/v1
+export OPENAI_API_KEY=YOUR_OPENAI_COMPAT_API_KEY  # 또는 필수가 아닌 경우 생략
+```
+
+```python
+# Python의 openai 라이브러리
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:3200/v1",
+    api_key="YOUR_OPENAI_COMPAT_API_KEY"  # 또는 필수가 아닌 경우 임의의 문자열
+)
+
+response = client.chat.completions.create(
+    model="bigscience/bloom-560m",
+    messages=[
+        {"role": "user", "content": "AI가 무엇인가요?"}
+    ]
+)
+
+print(response.choices[0].message.content)
 ```
 
 ## PLM 결제 시스템
