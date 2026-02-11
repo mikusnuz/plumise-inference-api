@@ -1,56 +1,89 @@
 import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
-import { ethers } from 'ethers';
+import {
+  createPublicClient,
+  createWalletClient,
+  http,
+  webSocket,
+  getContract,
+  verifyMessage,
+  type PublicClient,
+  type WalletClient,
+  type GetContractReturnType,
+  type Address,
+  type Chain,
+  type Transport,
+} from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import {
+  plumise,
+  addresses,
+  inferencePaymentAbi,
+  formatPLM,
+} from '@plumise/core';
 import { CHAIN_CONFIG } from './chain.config';
-import InferencePaymentABI from '../../common/abis/InferencePayment.json';
 
 @Injectable()
 export class ChainService implements OnModuleInit {
   private readonly logger = new Logger(ChainService.name);
-  private provider: ethers.JsonRpcProvider;
-  private wsProvider: ethers.WebSocketProvider;
-  private signer?: ethers.Wallet;
-
-  private agentRegistryContract?: ethers.Contract;
-  private rewardPoolContract?: ethers.Contract;
-  private inferencePaymentContract?: ethers.Contract;
+  private publicClient: PublicClient;
+  private wsPublicClient: PublicClient;
+  private walletClient: WalletClient | null = null;
+  private signerAddress: Address | null = null;
 
   async onModuleInit() {
-    this.provider = new ethers.JsonRpcProvider(CHAIN_CONFIG.rpcUrl);
-    this.wsProvider = new ethers.WebSocketProvider(CHAIN_CONFIG.wsUrl);
+    const chain: Chain = {
+      ...plumise,
+      id: CHAIN_CONFIG.chainId,
+    };
+
+    this.publicClient = createPublicClient({
+      chain,
+      transport: http(CHAIN_CONFIG.rpcUrl),
+    });
+
+    this.wsPublicClient = createPublicClient({
+      chain,
+      transport: webSocket(CHAIN_CONFIG.wsUrl),
+    });
 
     if (CHAIN_CONFIG.gatewayPrivateKey) {
-      this.signer = new ethers.Wallet(CHAIN_CONFIG.gatewayPrivateKey, this.provider);
-      this.logger.log(`Gateway signer initialized: ${this.signer.address}`);
+      const account = privateKeyToAccount(CHAIN_CONFIG.gatewayPrivateKey as `0x${string}`);
+      this.signerAddress = account.address;
+      this.walletClient = createWalletClient({
+        account,
+        chain,
+        transport: http(CHAIN_CONFIG.rpcUrl),
+      });
+      this.logger.log(`Gateway signer initialized: ${account.address}`);
     } else {
       this.logger.warn('Gateway private key not configured, credit deduction will fail');
     }
 
-    const network = await this.provider.getNetwork();
-    this.logger.log(`Connected to chain: ${network.name} (${network.chainId})`);
+    const chainId = await this.publicClient.getChainId();
+    this.logger.log(`Connected to chain: ${chainId}`);
 
     this.setupContracts();
   }
 
   private setupContracts() {
-    // Contract setup will be done after deployment
-    // For now, we just log the addresses
     this.logger.log('Contract addresses:', CHAIN_CONFIG.contracts);
   }
 
-  getProvider(): ethers.JsonRpcProvider {
-    return this.provider;
+  getPublicClient(): PublicClient {
+    return this.publicClient;
   }
 
-  getWsProvider(): ethers.WebSocketProvider {
-    return this.wsProvider;
+  getWsPublicClient(): PublicClient {
+    return this.wsPublicClient;
   }
 
   async getBalance(address: string): Promise<bigint> {
-    return await this.provider.getBalance(address);
+    return await this.publicClient.getBalance({ address: address as Address });
   }
 
   async getBlockNumber(): Promise<number> {
-    return await this.provider.getBlockNumber();
+    const blockNumber = await this.publicClient.getBlockNumber();
+    return Number(blockNumber);
   }
 
   async verifySignature(
@@ -59,24 +92,40 @@ export class ChainService implements OnModuleInit {
     expectedAddress: string,
   ): Promise<boolean> {
     try {
-      const recoveredAddress = ethers.verifyMessage(message, signature);
-      return recoveredAddress.toLowerCase() === expectedAddress.toLowerCase();
+      const valid = await verifyMessage({
+        address: expectedAddress as Address,
+        message,
+        signature: signature as `0x${string}`,
+      });
+      return valid;
     } catch (error) {
       this.logger.error('Signature verification failed:', error);
       return false;
     }
   }
 
-  getInferencePaymentContract(): ethers.Contract | null {
-    const address = CHAIN_CONFIG.contracts.inferencePayment;
-    if (!address) {
+  getInferencePaymentContract() {
+    const address = CHAIN_CONFIG.contracts.inferencePayment || addresses.mainnet.InferencePayment;
+    if (!address || address === '0x0000000000000000000000000000000000000000') {
       return null;
     }
-    const signerOrProvider = this.signer || this.provider;
-    return new ethers.Contract(address, InferencePaymentABI, signerOrProvider);
+
+    const client = this.walletClient
+      ? { public: this.publicClient, wallet: this.walletClient }
+      : this.publicClient;
+
+    return getContract({
+      address: address as Address,
+      abi: inferencePaymentAbi,
+      client,
+    });
   }
 
-  getSigner(): ethers.Wallet | null {
-    return this.signer || null;
+  getSignerAddress(): Address | null {
+    return this.signerAddress;
+  }
+
+  getWalletClient(): WalletClient | null {
+    return this.walletClient;
   }
 }

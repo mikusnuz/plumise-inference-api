@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ChainService } from '../chain/chain.service';
-import { ethers } from 'ethers';
+import { formatPLM } from '@plumise/core';
 
 @Injectable()
 export class PaymentService {
@@ -16,7 +16,7 @@ export class PaymentService {
         return 'free';
       }
 
-      const tier = await contract.getUserTier(address);
+      const tier = await contract.read.getUserTier([address as `0x${string}`]);
       return tier === 1n ? 'pro' : 'free';
     } catch (error) {
       this.logger.error(`Failed to get user tier for ${address}: ${error.message}`);
@@ -32,8 +32,8 @@ export class PaymentService {
         return 0;
       }
 
-      const balance = await contract.getUserBalance(address);
-      return parseFloat(ethers.formatEther(balance));
+      const balance = await contract.read.getUserBalance([address as `0x${string}`]);
+      return parseFloat(formatPLM(balance));
     } catch (error) {
       this.logger.error(`Failed to get credits for ${address}: ${error.message}`);
       return 0;
@@ -48,8 +48,8 @@ export class PaymentService {
         return true;
       }
 
-      const signer = this.chainService.getSigner();
-      if (!signer) {
+      const walletClient = this.chainService.getWalletClient();
+      if (!walletClient) {
         this.logger.warn('Gateway signer not configured, skipping deduction');
         return true;
       }
@@ -61,8 +61,16 @@ export class PaymentService {
       }
 
       this.logger.log(`Deducting ${tokens} tokens for ${address}`);
-      const tx = await contract.useCredits(address, tokens);
-      await tx.wait();
+      const publicClient = this.chainService.getPublicClient();
+      const { request } = await publicClient.simulateContract({
+        address: contract.address,
+        abi: contract.abi,
+        functionName: 'useCredits',
+        args: [address as `0x${string}`, BigInt(tokens)],
+        account: walletClient.account,
+      });
+      const hash = await walletClient.writeContract(request);
+      await publicClient.waitForTransactionReceipt({ hash });
 
       this.logger.log(`Successfully deducted ${tokens} tokens for ${address}`);
       return true;
