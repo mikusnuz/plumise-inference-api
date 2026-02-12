@@ -119,7 +119,7 @@ export class NodeRouterService implements OnModuleDestroy {
     if (!this.oracleApiUrl) return;
 
     try {
-      const response = await axios.get<PipelineTopology>(
+      const response = await axios.get(
         `${this.oracleApiUrl}/api/v1/pipeline/topology`,
         {
           params: { model: this.currentModel },
@@ -127,7 +127,27 @@ export class NodeRouterService implements OnModuleDestroy {
         },
       );
 
-      this.topology = response.data;
+      const data = response.data;
+      const nodes: PipelineNode[] = (data.nodes || []).map((n: any) => ({
+        address: n.nodeAddress || n.address || '',
+        grpcEndpoint: n.grpcEndpoint || '',
+        httpEndpoint: n.httpEndpoint || '',
+        layerStart: n.layerStart,
+        layerEnd: n.layerEnd,
+        pipelineOrder: n.pipelineOrder,
+        ready: n.ready,
+      }));
+
+      const totalLayers = nodes.length > 0
+        ? Math.max(...nodes.map((n) => n.layerEnd))
+        : 0;
+
+      this.topology = {
+        model: data.model || this.currentModel,
+        totalLayers,
+        nodes,
+      };
+
       this.logger.debug(
         `Topology refreshed: ${this.topology.nodes.length} nodes, ${this.topology.totalLayers} layers`,
       );
