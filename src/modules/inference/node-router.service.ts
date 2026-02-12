@@ -84,16 +84,16 @@ export class NodeRouterService {
     if (!this.oracleApiUrl) return;
 
     try {
-      const response = await axios.get(`${this.oracleApiUrl}/api/v1/nodes/active`, {
+      const response = await axios.get(`${this.oracleApiUrl}/api/nodes`, {
         timeout: 5000,
       });
 
       if (response.data?.nodes && Array.isArray(response.data.nodes)) {
         for (const node of response.data.nodes) {
-          if (node.apiUrl && !this.nodes.has(node.apiUrl)) {
-            this.logger.log(`Discovered new node from Oracle: ${node.apiUrl}`);
-            this.nodes.set(node.apiUrl, {
-              url: node.apiUrl,
+          if (node.endpoint && node.endpoint.trim() && !this.nodes.has(node.endpoint)) {
+            this.logger.log(`Discovered new node from Oracle: ${node.endpoint} (${node.address})`);
+            this.nodes.set(node.endpoint, {
+              url: node.endpoint,
               address: node.address || '',
               status: 'online',
               lastHealthCheck: Date.now(),
