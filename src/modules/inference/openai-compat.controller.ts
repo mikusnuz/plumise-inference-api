@@ -4,10 +4,12 @@ import {
   Get,
   Body,
   Headers,
+  Res,
   HttpException,
   HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { Response } from 'express';
 import { InferenceService } from './inference.service';
 import { ModelService } from '../model/model.service';
 import { InferenceRequest } from '../../common/interfaces';
@@ -70,46 +72,41 @@ export class OpenAICompatController {
   async chatCompletions(
     @Body() body: OpenAIChatRequest,
     @Headers('authorization') authHeader?: string,
-  ): Promise<OpenAIChatResponse> {
+    @Res() res: Response,
+  ): Promise<void> {
     const apiKey = process.env.OPENAI_COMPAT_API_KEY;
     if (apiKey) {
       const token = authHeader?.replace('Bearer ', '');
       if (token !== apiKey) {
-        throw new HttpException(
-          {
-            error: {
-              message: 'Invalid API key',
-              type: 'invalid_request_error',
-              code: 'invalid_api_key',
-            },
+        res.status(HttpStatus.UNAUTHORIZED).json({
+          error: {
+            message: 'Invalid API key',
+            type: 'invalid_request_error',
+            code: 'invalid_api_key',
           },
-          HttpStatus.UNAUTHORIZED,
-        );
+        });
+        return;
       }
     }
 
     if (!body.model) {
-      throw new HttpException(
-        {
-          error: {
-            message: 'model is required',
-            type: 'invalid_request_error',
-          },
+      res.status(HttpStatus.BAD_REQUEST).json({
+        error: {
+          message: 'model is required',
+          type: 'invalid_request_error',
         },
-        HttpStatus.BAD_REQUEST,
-      );
+      });
+      return;
     }
 
     if (!body.messages || body.messages.length === 0) {
-      throw new HttpException(
-        {
-          error: {
-            message: 'messages is required and must not be empty',
-            type: 'invalid_request_error',
-          },
+      res.status(HttpStatus.BAD_REQUEST).json({
+        error: {
+          message: 'messages is required and must not be empty',
+          type: 'invalid_request_error',
         },
-        HttpStatus.BAD_REQUEST,
-      );
+      });
+      return;
     }
 
     try {
@@ -129,11 +126,59 @@ export class OpenAICompatController {
       );
 
       const responseContent = result.choices[0]?.message?.content || '';
+      const completionId = `chatcmpl-${result.id}`;
+      const created = Math.floor(Date.now() / 1000);
 
+      // SSE streaming response (simulated from complete result)
+      if (body.stream) {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('X-Accel-Buffering', 'no');
+
+        // Role chunk
+        const roleChunk = {
+          id: completionId,
+          object: 'chat.completion.chunk',
+          created,
+          model: body.model,
+          choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }],
+        };
+        res.write(`data: ${JSON.stringify(roleChunk)}\n\n`);
+
+        // Content chunks (split by words for natural streaming)
+        const words = responseContent.split(/(\s+)/);
+        for (const word of words) {
+          if (!word) continue;
+          const chunk = {
+            id: completionId,
+            object: 'chat.completion.chunk',
+            created,
+            model: body.model,
+            choices: [{ index: 0, delta: { content: word }, finish_reason: null }],
+          };
+          res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+        }
+
+        // Final chunk
+        const doneChunk = {
+          id: completionId,
+          object: 'chat.completion.chunk',
+          created,
+          model: body.model,
+          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+        };
+        res.write(`data: ${JSON.stringify(doneChunk)}\n\n`);
+        res.write('data: [DONE]\n\n');
+        res.end();
+        return;
+      }
+
+      // Non-streaming response
       const response: OpenAIChatResponse = {
-        id: `chatcmpl-${result.id}`,
+        id: completionId,
         object: 'chat.completion',
-        created: Math.floor(Date.now() / 1000),
+        created,
         model: body.model,
         choices: [
           {
@@ -152,17 +197,14 @@ export class OpenAICompatController {
         },
       };
 
-      return response;
+      res.json(response);
     } catch (error) {
-      throw new HttpException(
-        {
-          error: {
-            message: error.message || 'Internal server error',
-            type: 'internal_error',
-          },
+      res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
+        error: {
+          message: error.message || 'Internal server error',
+          type: 'internal_error',
         },
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
+      });
     }
   }
 
