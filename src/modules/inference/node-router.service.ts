@@ -7,6 +7,7 @@ export interface PetalsGenerateRequest {
     max_new_tokens?: number;
     temperature?: number;
     top_p?: number;
+    repetition_penalty?: number;
     do_sample?: boolean;
   };
 }
