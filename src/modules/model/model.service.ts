@@ -13,14 +13,14 @@ export class ModelService implements OnModuleInit {
   private initializeModels() {
     const modelsList: ModelInfo[] = [
       {
-        id: 'gpt-oss-20b',
+        id: 'openai/gpt-oss-20b',
         name: 'GPT-OSS 20B',
-        description: 'Plumise distributed inference model (20B parameters)',
+        description: 'OpenAI GPT-OSS 20B MoE model (21B params, 3.6B active)',
         max_tokens: 4096,
         tier: 'free',
         nodes: 2,
         status: 'available',
-        totalLayers: 48,
+        totalLayers: 24,
       },
       {
         id: 'bigscience/bloom-560m',
