@@ -71,8 +71,8 @@ export class OpenAICompatController {
   @ApiOperation({ summary: 'OpenAI-compatible chat completions endpoint' })
   async chatCompletions(
     @Body() body: OpenAIChatRequest,
-    @Headers('authorization') authHeader?: string,
     @Res() res: Response,
+    @Headers('authorization') authHeader?: string,
   ): Promise<void> {
     const apiKey = process.env.OPENAI_COMPAT_API_KEY;
     if (apiKey) {
