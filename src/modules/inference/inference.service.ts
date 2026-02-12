@@ -69,12 +69,13 @@ export class InferenceService {
           max_new_tokens: request.max_tokens,
           temperature: request.temperature ?? 0.7,
           top_p: request.top_p ?? 0.9,
+          repetition_penalty: 1.3,
           do_sample: true,
         },
       });
 
       const latencyMs = Date.now() - startTime;
-      const completionText = petalsResponse.generated_text;
+      const completionText = this.trimAtStopSequence(petalsResponse.generated_text);
       const completionTokens = petalsResponse.num_tokens || estimateTokens(completionText);
       const totalTokens = promptTokens + completionTokens;
 
@@ -124,6 +125,18 @@ export class InferenceService {
         return `### ${role}:\n${msg.content}\n`;
       })
       .join('\n') + '\n### ASSISTANT:\n';
+  }
+
+  private trimAtStopSequence(text: string): string {
+    const stopPatterns = ['### USER:', '### SYSTEM:', '### ASSISTANT:', 'USER:', '\n###'];
+    let result = text;
+    for (const stop of stopPatterns) {
+      const idx = result.indexOf(stop);
+      if (idx > 0) {
+        result = result.substring(0, idx);
+      }
+    }
+    return result.trim();
   }
 
   async *streamInference(

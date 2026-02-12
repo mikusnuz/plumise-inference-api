@@ -231,7 +231,7 @@ export class OpenAICompatController {
       }
     }
 
-    const models = this.modelService.getAllModels();
+    const models = this.modelService.getAllModels().filter(m => m.status === 'available');
 
     return {
       object: 'list',
