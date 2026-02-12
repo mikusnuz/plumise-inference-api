@@ -26,7 +26,7 @@ export class ReportController {
   }
 
   @Post()
-  @ApiOperation({ summary: 'Receive metrics from Petals nodes (Oracle only)' })
+  @ApiOperation({ summary: 'Receive metrics from agent nodes (Oracle only)' })
   @ApiHeader({ name: 'x-api-key', required: true })
   receiveReport(@Headers('x-api-key') apiKey: string, @Body() report: any) {
     this.verifyApiKey(apiKey);

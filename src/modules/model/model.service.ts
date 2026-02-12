@@ -20,6 +20,7 @@ export class ModelService implements OnModuleInit {
         tier: 'free',
         nodes: 1,
         status: 'available',
+        totalLayers: 24,
       },
       {
         id: 'meta-llama/Llama-3.1-8B',
@@ -29,6 +30,7 @@ export class ModelService implements OnModuleInit {
         tier: 'free',
         nodes: 0,
         status: 'offline',
+        totalLayers: 32,
       },
       {
         id: 'meta-llama/Llama-3.1-70B',
@@ -38,6 +40,7 @@ export class ModelService implements OnModuleInit {
         tier: 'pro',
         nodes: 0,
         status: 'offline',
+        totalLayers: 80,
       },
       {
         id: 'mistralai/Mistral-7B-Instruct-v0.2',
@@ -47,6 +50,7 @@ export class ModelService implements OnModuleInit {
         tier: 'free',
         nodes: 0,
         status: 'offline',
+        totalLayers: 32,
       },
     ];
 

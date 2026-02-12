@@ -36,6 +36,7 @@ export interface ModelInfo {
   tier: 'free' | 'pro';
   nodes: number;
   status: 'available' | 'degraded' | 'offline';
+  totalLayers?: number;
 }
 
 export interface JwtPayload {

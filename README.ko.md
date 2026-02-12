@@ -2,11 +2,11 @@
 
 **[English](README.md) | [한국어](README.ko.md)**
 
-Plumise AI 추론 게이트웨이 -- 분산 Petals 노드 네트워크를 위한 API 게이트웨이.
+Plumise AI 추론 게이트웨이 -- 분산 에이전트 노드 네트워크를 위한 API 게이트웨이.
 
-이 서비스는 **팀이 운영하는 서비스**로, 최종 사용자에게 OpenAI 호환 API를 제공하고, 지갑 서명으로 요청을 인증하며, Oracle을 통해 활성 Petals 노드를 탐색하고, 로드 밸런싱과 장애 조치를 통해 분산 네트워크에 추론 요청을 라우팅합니다.
+이 서비스는 **팀이 운영하는 서비스**로, 최종 사용자에게 OpenAI 호환 API를 제공하고, 지갑 서명으로 요청을 인증하며, Oracle을 통해 활성 에이전트 노드를 탐색하고, 로드 밸런싱과 장애 조치를 통해 분산 네트워크에 추론 요청을 라우팅합니다.
 
-> **참고**: 이 서비스는 Plumise 팀이 운영합니다. 컴퓨팅을 기여하고 PLM을 채굴하려면 [plumise-petals](https://github.com/mikusnuz/plumise-petals)를 참조하세요.
+> **참고**: 이 서비스는 Plumise 팀이 운영합니다. 컴퓨팅을 기여하고 PLM을 채굴하려면 [plumise-agent](https://github.com/mikusnuz/plumise-agent)를 참조하세요.
 
 ## 아키텍처
 
@@ -19,17 +19,17 @@ Plumise AI 추론 게이트웨이 -- 분산 Petals 노드 네트워크를 위한
                                              노드 디스커버리
                                                    |
 +----------+      +--------------------+           v            +------------------+
-| 클라이언트 | ---> | Inference API     | ---+-- 라우팅 -------> | Petals Node A    |
+| 클라이언트 | ---> | Inference API     | ---+-- 라우팅 -------> | Agent Node A     |
 | (지갑     |      | (이 서비스)        |    |                   +------------------+
-|  인증)    |      |                    |    +-- 라우팅 -------> | Petals Node B    |
+|  인증)    |      |                    |    +-- 라우팅 -------> | Agent Node B     |
 +----------+      | - 인증 (JWT)       |    |                   +------------------+
-                  | - 속도 제한        |    +-- 라우팅 -------> | Petals Node C    |
+                  | - 속도 제한        |    +-- 라우팅 -------> | Agent Node C     |
                   | - 노드 라우터      |                        +------------------+
                   | - 메트릭 리포터    |
                   +--------------------+
 ```
 
-전체 생태계 아키텍처는 [plumise-petals/docs/ARCHITECTURE.md](https://github.com/mikusnuz/plumise-petals/blob/main/docs/ARCHITECTURE.md)를 참조하세요.
+전체 생태계 아키텍처는 [plumise-agent/docs/ARCHITECTURE.md](https://github.com/mikusnuz/plumise-agent/blob/main/docs/ARCHITECTURE.md)를 참조하세요.
 
 ## 주요 기능
 
@@ -69,8 +69,8 @@ npm run start:dev
 | `CHAIN_ID` | `41956` | Plumise 체인 ID |
 | `ORACLE_API_URL` | `http://localhost:15481` | 노드 디스커버리 및 메트릭용 Oracle API |
 | `ORACLE_API_KEY` | -- | Oracle 통신용 API 키 |
-| `NODE_URLS` | -- | 정적 Petals 노드 URL (쉼표 구분, 대체) |
-| `PETALS_API_URL` | `http://localhost:31330` | 직접 Petals API URL (단일 노드 모드) |
+| `NODE_URLS` | -- | 정적 에이전트 노드 URL (쉼표 구분, 대체) |
+| `AGENT_API_URL` | `http://localhost:31330` | 직접 에이전트 API URL (단일 노드 모드) |
 | `PRIVATE_KEY` | -- | 메트릭 서명용 프라이빗 키 |
 | `FREE_TIER_LIMIT` | `10` | Free 티어 속도 제한 (요청/시간) |
 | `FREE_TIER_MAX_TOKENS` | `2048` | Free 티어 요청당 최대 토큰 |
@@ -80,7 +80,7 @@ npm run start:dev
 
 **중요**:
 - `ORACLE_API_URL`: 게이트웨이가 Oracle에서 활성 노드 목록을 조회
-- `NODE_URLS`: 정적 Petals 노드 URL 목록 (쉼표 구분, 대체용)
+- `NODE_URLS`: 정적 에이전트 노드 URL 목록 (쉼표 구분, 대체용)
 - `ORACLE_API_URL` 또는 `NODE_URLS` 중 하나 이상 설정 필요
 - 게이트웨이는 자동으로 헬스체크를 수행하고 정상 노드로 라우팅
 

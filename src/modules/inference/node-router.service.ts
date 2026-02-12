@@ -1,7 +1,7 @@
-import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
-import axios, { AxiosInstance } from 'axios';
+import { Injectable, Logger, ServiceUnavailableException, OnModuleDestroy } from '@nestjs/common';
+import axios from 'axios';
 
-export interface PetalsGenerateRequest {
+export interface AgentGenerateRequest {
   inputs: string;
   parameters?: {
     max_new_tokens?: number;
@@ -12,9 +12,25 @@ export interface PetalsGenerateRequest {
   };
 }
 
-export interface PetalsGenerateResponse {
+export interface AgentGenerateResponse {
   generated_text: string;
   num_tokens?: number;
+}
+
+export interface PipelineNode {
+  address: string;
+  grpcEndpoint: string;
+  httpEndpoint: string;
+  layerStart: number;
+  layerEnd: number;
+  pipelineOrder: number;
+  ready: boolean;
+}
+
+export interface PipelineTopology {
+  model: string;
+  totalLayers: number;
+  nodes: PipelineNode[];
 }
 
 export interface NodeInfo {
@@ -26,20 +42,25 @@ export interface NodeInfo {
 }
 
 @Injectable()
-export class NodeRouterService {
+export class NodeRouterService implements OnModuleDestroy {
   private readonly logger = new Logger(NodeRouterService.name);
   private readonly oracleApiUrl: string | undefined;
   private readonly nodeUrls: string[];
   private readonly maxRetries = 3;
   private readonly healthCheckInterval = 30000;
+  private readonly topologyRefreshInterval = 30000;
   private readonly maxConsecutiveFailures = 3;
+  private readonly currentModel: string;
 
   private nodes: Map<string, NodeInfo> = new Map();
   private currentNodeIndex = 0;
   private healthCheckTimer: NodeJS.Timeout | null = null;
+  private topologyRefreshTimer: NodeJS.Timeout | null = null;
+  private topology: PipelineTopology | null = null;
 
   constructor() {
     this.oracleApiUrl = process.env.ORACLE_API_URL;
+    this.currentModel = process.env.DEFAULT_MODEL || 'bigscience/bloom-560m';
 
     const nodeUrlsEnv = process.env.NODE_URLS || '';
     this.nodeUrls = nodeUrlsEnv
@@ -60,6 +81,7 @@ export class NodeRouterService {
 
     this.initializeNodes();
     this.startHealthCheck();
+    this.startTopologyRefresh();
   }
 
   private initializeNodes() {
@@ -79,6 +101,43 @@ export class NodeRouterService {
       await this.refreshNodesFromOracle();
       await this.checkNodesHealth();
     }, this.healthCheckInterval);
+  }
+
+  private startTopologyRefresh() {
+    if (!this.oracleApiUrl) {
+      this.logger.debug('Oracle API not configured, skipping topology refresh');
+      return;
+    }
+
+    this.refreshTopology();
+    this.topologyRefreshTimer = setInterval(async () => {
+      await this.refreshTopology();
+    }, this.topologyRefreshInterval);
+  }
+
+  private async refreshTopology() {
+    if (!this.oracleApiUrl) return;
+
+    try {
+      const response = await axios.get<PipelineTopology>(
+        `${this.oracleApiUrl}/api/v1/pipeline/topology`,
+        {
+          params: { model: this.currentModel },
+          timeout: 5000,
+        },
+      );
+
+      this.topology = response.data;
+      this.logger.debug(
+        `Topology refreshed: ${this.topology.nodes.length} nodes, ${this.topology.totalLayers} layers`,
+      );
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.code === 'ECONNREFUSED') {
+        this.logger.debug('Oracle API unreachable for topology refresh');
+      } else {
+        this.logger.warn(`Failed to refresh topology: ${error.message}`);
+      }
+    }
   }
 
   private async refreshNodesFromOracle() {
@@ -142,6 +201,32 @@ export class NodeRouterService {
     await Promise.all(healthCheckPromises);
   }
 
+  private getFirstNode(): NodeInfo | null {
+    if (!this.topology?.nodes?.length) return null;
+
+    const firstNodes = this.topology.nodes
+      .filter((n) => n.ready && n.pipelineOrder === 0)
+      .sort((a, b) => a.pipelineOrder - b.pipelineOrder);
+
+    if (firstNodes.length === 0) return null;
+
+    const first = firstNodes[0];
+    let nodeInfo = this.nodes.get(first.httpEndpoint);
+
+    if (!nodeInfo) {
+      nodeInfo = {
+        url: first.httpEndpoint,
+        address: first.address,
+        status: 'online',
+        lastHealthCheck: Date.now(),
+        consecutiveFailures: 0,
+      };
+      this.nodes.set(first.httpEndpoint, nodeInfo);
+    }
+
+    return nodeInfo;
+  }
+
   private getNextNode(): NodeInfo | null {
     const onlineNodes = Array.from(this.nodes.values()).filter(
       (node) => node.status === 'online',
@@ -158,17 +243,22 @@ export class NodeRouterService {
   }
 
   async forwardRequest(
-    request: PetalsGenerateRequest,
-  ): Promise<PetalsGenerateResponse> {
+    request: AgentGenerateRequest,
+  ): Promise<AgentGenerateResponse> {
     let lastError: Error | null = null;
 
     for (let retry = 0; retry < this.maxRetries; retry++) {
-      const node = this.getNextNode();
+      const firstNode = this.getFirstNode();
+      const node = firstNode || this.getNextNode();
 
       if (!node) {
         throw new ServiceUnavailableException(
           'No inference nodes available. Please try again later.',
         );
+      }
+
+      if (firstNode) {
+        this.logger.debug(`Routing to pipeline first node: ${node.url}`);
       }
 
       try {
@@ -178,7 +268,7 @@ export class NodeRouterService {
           headers: { 'Content-Type': 'application/json' },
         });
 
-        const response = await client.post<PetalsGenerateResponse>(
+        const response = await client.post<AgentGenerateResponse>(
           '/api/v1/generate',
           request,
         );
@@ -224,17 +314,22 @@ export class NodeRouterService {
   }
 
   async *forwardStreamRequest(
-    request: PetalsGenerateRequest,
+    request: AgentGenerateRequest,
   ): AsyncGenerator<string> {
     let lastError: Error | null = null;
 
     for (let retry = 0; retry < this.maxRetries; retry++) {
-      const node = this.getNextNode();
+      const firstNode = this.getFirstNode();
+      const node = firstNode || this.getNextNode();
 
       if (!node) {
         throw new ServiceUnavailableException(
           'No inference nodes available. Please try again later.',
         );
+      }
+
+      if (firstNode) {
+        this.logger.debug(`Routing stream to pipeline first node: ${node.url}`);
       }
 
       try {
@@ -308,9 +403,16 @@ export class NodeRouterService {
     );
   }
 
+  getTopology(): PipelineTopology | null {
+    return this.topology;
+  }
+
   onModuleDestroy() {
     if (this.healthCheckTimer) {
       clearInterval(this.healthCheckTimer);
+    }
+    if (this.topologyRefreshTimer) {
+      clearInterval(this.topologyRefreshTimer);
     }
   }
 }

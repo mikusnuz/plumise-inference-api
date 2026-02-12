@@ -2,11 +2,11 @@
 
 **[English](README.md) | [한국어](README.ko.md)**
 
-Plumise AI Inference Gateway -- API gateway for the distributed Petals node network.
+Plumise AI Inference Gateway -- API gateway for the distributed agent node network.
 
-This is a **team-operated service** that provides an OpenAI-compatible API to end users, authenticates requests via wallet signatures, discovers active Petals nodes through the Oracle, and routes inference requests across the distributed network with load balancing and failover.
+This is a **team-operated service** that provides an OpenAI-compatible API to end users, authenticates requests via wallet signatures, discovers active agent nodes through the Oracle, and routes inference requests across the distributed network with load balancing and failover.
 
-> **Note**: This service is operated by the Plumise team. If you want to contribute compute and earn PLM, see [plumise-petals](https://github.com/mikusnuz/plumise-petals) instead.
+> **Note**: This service is operated by the Plumise team. If you want to contribute compute and earn PLM, see [plumise-agent](https://github.com/mikusnuz/plumise-agent) instead.
 
 ## Architecture
 
@@ -19,11 +19,11 @@ This is a **team-operated service** that provides an OpenAI-compatible API to en
                                             node discovery
                                                    |
 +----------+      +--------------------+           v            +------------------+
-|  Client  | ---> | Inference API      | ---+-- route --------> | Petals Node A    |
+|  Client  | ---> | Inference API      | ---+-- route --------> | Agent Node A     |
 | (wallet  |      | (this service)     |    |                   +------------------+
-|  auth)   |      |                    |    +-- route --------> | Petals Node B    |
+|  auth)   |      |                    |    +-- route --------> | Agent Node B     |
 +----------+      | - Auth (JWT)       |    |                   +------------------+
-     |            | - Rate Limiting    |    +-- route --------> | Petals Node C    |
+     |            | - Rate Limiting    |    +-- route --------> | Agent Node C     |
      |            | - Payment (PLM)    |                        +------------------+
      |            | - Node Router      |
      | deposit    | - Metrics Reporter |
@@ -43,7 +43,7 @@ This is a **team-operated service** that provides an OpenAI-compatible API to en
 +------------------------+
 ```
 
-For the full ecosystem architecture, see [plumise-petals/docs/ARCHITECTURE.md](https://github.com/mikusnuz/plumise-petals/blob/main/docs/ARCHITECTURE.md).
+For the full ecosystem architecture, see [plumise-agent/docs/ARCHITECTURE.md](https://github.com/mikusnuz/plumise-agent/blob/main/docs/ARCHITECTURE.md).
 
 ## Features
 
@@ -83,8 +83,8 @@ Copy `.env.example` to `.env` and configure:
 | `CHAIN_ID` | `41956` | Plumise chain ID |
 | `ORACLE_API_URL` | `http://localhost:15481` | Oracle API for node discovery and metrics |
 | `ORACLE_API_KEY` | -- | API key for Oracle communication |
-| `NODE_URLS` | -- | Static Petals node URLs (comma-separated, fallback) |
-| `PETALS_API_URL` | `http://localhost:31330` | Direct Petals API URL (single-node mode) |
+| `NODE_URLS` | -- | Static agent node URLs (comma-separated, fallback) |
+| `AGENT_API_URL` | `http://localhost:31330` | Direct agent API URL (single-node mode) |
 | `PRIVATE_KEY` | -- | Private key for metrics signing |
 | `FREE_TIER_LIMIT` | `10` | Free tier rate limit (requests/hour) |
 | `FREE_TIER_MAX_TOKENS` | `2048` | Free tier max tokens per request |
@@ -95,7 +95,7 @@ Copy `.env.example` to `.env` and configure:
 
 **Important**:
 - `ORACLE_API_URL`: Gateway fetches active node list from Oracle
-- `NODE_URLS`: Comma-separated list of static Petals node URLs (fallback)
+- `NODE_URLS`: Comma-separated list of static agent node URLs (fallback)
 - At least one of `ORACLE_API_URL` or `NODE_URLS` must be configured
 - Gateway automatically performs health checks and routes to healthy nodes
 
@@ -171,7 +171,7 @@ GET  /api/v1/models/:id             - Get model details (requires JWT)
 ### Report (Internal)
 
 ```
-POST /api/v1/report                 - Receive metrics from Petals nodes (API key)
+POST /api/v1/report                 - Receive metrics from agent nodes (API key)
 GET  /api/v1/report/agents          - Get all agent reports (API key)
 ```
 
@@ -391,10 +391,10 @@ Set `INFERENCE_PAYMENT_ADDRESS` in `.env` to enable the payment system. Without 
 1. **Client Authentication**: Users authenticate with wallet signature to get JWT token
 2. **Inference Request**: Client sends inference request with JWT authorization
 3. **Tier & Rate Limiting**: API checks user's tier (via InferencePayment contract) and rate limit
-4. **Node Selection**: NodeRouter selects healthy node using round-robin
-5. **Request Forwarding**: Forward request to selected Petals node
+4. **Node Selection**: NodeRouter fetches pipeline topology from Oracle and routes to first node (pipelineOrder=0)
+5. **Request Forwarding**: Forward request to first pipeline node (which orchestrates distributed inference via gRPC)
 6. **Failover**: If node fails, automatically retry with next healthy node (up to 3 retries)
-7. **Response Processing**: Parse Petals response, count tokens, measure latency
+7. **Response Processing**: Parse agent response, count tokens, measure latency
 8. **Credit Deduction**: For Pro tier users, deduct PLM credits via `useCredits()` on-chain
 9. **Metrics Reporting**: Background job reports aggregated metrics to Oracle every 60s
 10. **Response Return**: Send formatted OpenAI-compatible response to client
@@ -409,14 +409,14 @@ src/
 │   │   ├── inference.service.ts       # Business logic
 │   │   ├── inference.controller.ts    # REST endpoints
 │   │   ├── inference.gateway.ts       # WebSocket gateway
-│   │   ├── node-router.service.ts     # Node discovery & load balancing
-│   │   ├── petals-client.service.ts   # Petals HTTP client
+│   │   ├── node-router.service.ts     # Pipeline topology routing & load balancing
+│   │   ├── agent-client.service.ts    # Agent HTTP client
 │   │   └── metrics-reporter.service.ts # Metrics to Oracle
 │   ├── model/           # Model registry
 │   ├── payment/         # On-chain payment verification (Pro tier)
 │   ├── rate-limit/      # Tier-based rate limiting
 │   ├── chain/           # Blockchain interaction (ethers.js)
-│   └── report/          # Receive metrics from Petals nodes
+│   └── report/          # Receive metrics from agent nodes
 └── main.ts
 ```
 
@@ -446,7 +446,7 @@ npm run format
 
 | Project | Description | Link |
 |---------|-------------|------|
-| **plumise-petals** | AI inference node (users/miners install this) | [GitHub](https://github.com/mikusnuz/plumise-petals) |
+| **plumise-agent** | AI inference node (users/miners install this) | [GitHub](https://github.com/mikusnuz/plumise-agent) |
 | **plumise-oracle** | Metrics aggregation, scoring, and on-chain reward reporting | [GitHub](https://github.com/mikusnuz/plumise-oracle) |
 | **plumise** | Plumise chain node (geth fork with AI precompiles) | [GitHub](https://github.com/mikusnuz/plumise) |
 | **plumise-contracts** | On-chain system contracts (RewardPool, AgentRegistry, etc.) | [GitHub](https://github.com/mikusnuz/plumise-contracts) |

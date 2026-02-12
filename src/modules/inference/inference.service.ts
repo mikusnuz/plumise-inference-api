@@ -63,7 +63,7 @@ export class InferenceService {
     const promptTokens = estimateTokens(promptText);
 
     try {
-      const petalsResponse = await this.nodeRouter.forwardRequest({
+      const agentResponse = await this.nodeRouter.forwardRequest({
         inputs: promptText,
         parameters: {
           max_new_tokens: request.max_tokens,
@@ -75,8 +75,8 @@ export class InferenceService {
       });
 
       const latencyMs = Date.now() - startTime;
-      const completionText = this.trimAtStopSequence(petalsResponse.generated_text);
-      const completionTokens = petalsResponse.num_tokens || estimateTokens(completionText);
+      const completionText = this.trimAtStopSequence(agentResponse.generated_text);
+      const completionTokens = agentResponse.num_tokens || estimateTokens(completionText);
       const totalTokens = promptTokens + completionTokens;
 
       this.rateLimitService.incrementUsage(userAddress);
