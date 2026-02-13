@@ -43,7 +43,7 @@ export class InferenceController {
     return await this.inferenceService.runInference(request, user.address, tier);
   }
 
-  @Get('inference/stream')
+  @Post('inference/stream')
   @UseGuards(WalletAuthGuard, RateLimitGuard)
   @ApiBearerAuth()
   @Sse()
@@ -103,7 +103,6 @@ export class InferenceController {
         address: node.address,
         status: node.status,
         lastHealthCheck: new Date(node.lastHealthCheck).toISOString(),
-        consecutiveFailures: node.consecutiveFailures,
       },
     };
   }

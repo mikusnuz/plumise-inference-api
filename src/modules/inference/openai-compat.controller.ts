@@ -75,18 +75,27 @@ export class OpenAICompatController {
     @Headers('authorization') authHeader?: string,
   ): Promise<void> {
     const apiKey = process.env.OPENAI_COMPAT_API_KEY;
-    if (apiKey) {
-      const token = authHeader?.replace('Bearer ', '');
-      if (token !== apiKey) {
-        res.status(HttpStatus.UNAUTHORIZED).json({
-          error: {
-            message: 'Invalid API key',
-            type: 'invalid_request_error',
-            code: 'invalid_api_key',
-          },
-        });
-        return;
-      }
+    if (!apiKey) {
+      res.status(HttpStatus.SERVICE_UNAVAILABLE).json({
+        error: {
+          message: 'OpenAI-compatible API is not configured',
+          type: 'service_unavailable',
+          code: 'not_configured',
+        },
+      });
+      return;
+    }
+
+    const token = authHeader?.replace('Bearer ', '');
+    if (token !== apiKey) {
+      res.status(HttpStatus.UNAUTHORIZED).json({
+        error: {
+          message: 'Invalid API key',
+          type: 'invalid_request_error',
+          code: 'invalid_api_key',
+        },
+      });
+      return;
     }
 
     if (!body.model) {
@@ -215,20 +224,31 @@ export class OpenAICompatController {
     @Headers('authorization') authHeader?: string,
   ): OpenAIModelListResponse {
     const apiKey = process.env.OPENAI_COMPAT_API_KEY;
-    if (apiKey) {
-      const token = authHeader?.replace('Bearer ', '');
-      if (token !== apiKey) {
-        throw new HttpException(
-          {
-            error: {
-              message: 'Invalid API key',
-              type: 'invalid_request_error',
-              code: 'invalid_api_key',
-            },
+    if (!apiKey) {
+      throw new HttpException(
+        {
+          error: {
+            message: 'OpenAI-compatible API is not configured',
+            type: 'service_unavailable',
+            code: 'not_configured',
           },
-          HttpStatus.UNAUTHORIZED,
-        );
-      }
+        },
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
+
+    const token = authHeader?.replace('Bearer ', '');
+    if (token !== apiKey) {
+      throw new HttpException(
+        {
+          error: {
+            message: 'Invalid API key',
+            type: 'invalid_request_error',
+            code: 'invalid_api_key',
+          },
+        },
+        HttpStatus.UNAUTHORIZED,
+      );
     }
 
     const models = this.modelService.getAllModels().filter(m => m.status === 'available');

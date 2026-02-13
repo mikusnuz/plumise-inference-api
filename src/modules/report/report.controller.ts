@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiHeader } from '@nestjs/swagger';
 import { ReportService } from './report.service';
+import { AgentReportDto } from './dto/agent-report.dto';
 
 @ApiTags('report')
 @Controller('api/v1/report')
@@ -28,9 +29,13 @@ export class ReportController {
   @Post()
   @ApiOperation({ summary: 'Receive metrics from agent nodes (Oracle only)' })
   @ApiHeader({ name: 'x-api-key', required: true })
-  receiveReport(@Headers('x-api-key') apiKey: string, @Body() report: any) {
+  receiveReport(@Headers('x-api-key') apiKey: string, @Body() report: AgentReportDto) {
     this.verifyApiKey(apiKey);
-    this.reportService.receiveReport(report);
+    const agentReport = {
+      ...report,
+      timestamp: new Date(report.timestamp),
+    };
+    this.reportService.receiveReport(agentReport);
     return { status: 'ok' };
   }
 

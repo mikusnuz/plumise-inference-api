@@ -52,6 +52,55 @@ export class NodeRouterService implements OnModuleDestroy {
   private readonly maxConsecutiveFailures = 3;
   private readonly currentModel: string;
 
+  private isValidNodeUrl(url: string): boolean {
+    try {
+      const parsed = new URL(url);
+
+      if (!['http:', 'https:'].includes(parsed.protocol)) {
+        this.logger.warn(`Invalid protocol for node URL: ${url}`);
+        return false;
+      }
+
+      const hostname = parsed.hostname.toLowerCase();
+
+      const localHosts = ['localhost', '127.0.0.1', '0.0.0.0', '::1', '::'];
+      if (localHosts.includes(hostname)) {
+        this.logger.warn(`Local hostname rejected for node URL: ${url}`);
+        return false;
+      }
+
+      const ipParts = hostname.split('.');
+      if (ipParts.length === 4 && ipParts.every(p => /^\d+$/.test(p))) {
+        const octets = ipParts.map(p => parseInt(p, 10));
+
+        if (octets[0] === 10) {
+          this.logger.warn(`Private IP (10.x.x.x) rejected: ${url}`);
+          return false;
+        }
+
+        if (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) {
+          this.logger.warn(`Private IP (172.16-31.x.x) rejected: ${url}`);
+          return false;
+        }
+
+        if (octets[0] === 192 && octets[1] === 168) {
+          this.logger.warn(`Private IP (192.168.x.x) rejected: ${url}`);
+          return false;
+        }
+
+        if (octets[0] === 169 && octets[1] === 254) {
+          this.logger.warn(`Link-local IP (169.254.x.x) rejected: ${url}`);
+          return false;
+        }
+      }
+
+      return true;
+    } catch (error) {
+      this.logger.warn(`Failed to parse node URL: ${url}`);
+      return false;
+    }
+  }
+
   private nodes: Map<string, NodeInfo> = new Map();
   private currentNodeIndex = 0;
   private healthCheckTimer: NodeJS.Timeout | null = null;
@@ -171,6 +220,13 @@ export class NodeRouterService implements OnModuleDestroy {
       if (response.data?.nodes && Array.isArray(response.data.nodes)) {
         for (const node of response.data.nodes) {
           if (node.endpoint && node.endpoint.trim() && !this.nodes.has(node.endpoint)) {
+            if (!this.isValidNodeUrl(node.endpoint)) {
+              this.logger.warn(
+                `Rejected invalid/unsafe node URL from Oracle: ${node.endpoint} (${node.address})`,
+              );
+              continue;
+            }
+
             this.logger.log(`Discovered new node from Oracle: ${node.endpoint} (${node.address})`);
             this.nodes.set(node.endpoint, {
               url: node.endpoint,
