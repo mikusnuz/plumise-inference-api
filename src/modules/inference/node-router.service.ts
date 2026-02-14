@@ -154,7 +154,8 @@ export class NodeRouterService implements OnModuleDestroy {
       return;
     }
 
-    this.refreshTopology();
+    // Initial refresh + immediate health check to detect node types before first request
+    this.refreshTopology().then(() => this.checkNodesHealth());
     this.topologyRefreshTimer = setInterval(async () => {
       await this.refreshTopology();
     }, this.topologyRefreshInterval);
