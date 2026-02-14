@@ -1,5 +1,6 @@
-import { Injectable, Logger, ServiceUnavailableException, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Inject, Logger, ServiceUnavailableException, OnModuleDestroy, Optional } from '@nestjs/common';
 import axios from 'axios';
+import { AgentRelayService } from './agent-relay.service';
 
 export interface AgentGenerateRequest {
   inputs: string;
@@ -39,7 +40,7 @@ export interface NodeInfo {
   status: 'online' | 'offline';
   lastHealthCheck: number;
   consecutiveFailures: number;
-  nodeType: 'openai' | 'pipeline' | 'unknown';
+  nodeType: 'openai' | 'pipeline' | 'ws-relay' | 'unknown';
 }
 
 @Injectable()
@@ -59,7 +60,9 @@ export class NodeRouterService implements OnModuleDestroy {
   private topologyRefreshTimer: NodeJS.Timeout | null = null;
   private topology: PipelineTopology | null = null;
 
-  constructor() {
+  constructor(
+    @Optional() @Inject(AgentRelayService) private readonly agentRelay: AgentRelayService | null,
+  ) {
     this.oracleApiUrl = process.env.ORACLE_API_URL;
     this.currentModel = process.env.DEFAULT_MODEL || 'bigscience/bloom-560m';
     this.allowPrivateIps = process.env.ALLOW_PRIVATE_IPS !== 'false';
@@ -305,6 +308,26 @@ export class NodeRouterService implements OnModuleDestroy {
     const candidates: { node: NodeInfo; priority: number }[] = [];
     const seen = new Set<string>();
 
+    // Add WebSocket-connected agents (highest priority — directly reachable)
+    if (this.agentRelay?.hasConnectedAgents()) {
+      for (const agent of this.agentRelay.getConnectedAgents()) {
+        const key = `ws-relay://${agent.address}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        candidates.push({
+          node: {
+            url: key,
+            address: agent.address,
+            status: 'online',
+            lastHealthCheck: Date.now(),
+            consecutiveFailures: 0,
+            nodeType: 'ws-relay',
+          },
+          priority: -1, // Highest priority
+        });
+      }
+    }
+
     // Add topology nodes with priority
     if (this.topology?.nodes?.length) {
       for (const pNode of this.topology.nodes) {
@@ -380,6 +403,19 @@ export class NodeRouterService implements OnModuleDestroy {
     let lastError: Error | null = null;
 
     for (const node of candidates) {
+      // WebSocket relay — forward through connected agent
+      if (node.nodeType === 'ws-relay' && this.agentRelay) {
+        try {
+          this.logger.debug(`Routing to WS-relay agent: ${node.address}`);
+          const result = await this.agentRelay.sendRequest(node.address, request);
+          return result;
+        } catch (error) {
+          lastError = error as Error;
+          this.logger.warn(`WS-relay request failed: ${lastError.message}, trying next`);
+          continue;
+        }
+      }
+
       const client = axios.create({
         baseURL: node.url,
         timeout: 120000,
@@ -454,6 +490,21 @@ export class NodeRouterService implements OnModuleDestroy {
     let lastError: Error | null = null;
 
     for (const node of candidates) {
+      // WebSocket relay — stream through connected agent
+      if (node.nodeType === 'ws-relay' && this.agentRelay) {
+        try {
+          this.logger.debug(`Streaming from WS-relay agent: ${node.address}`);
+          for await (const chunk of this.agentRelay.sendStreamRequest(node.address, request)) {
+            yield chunk;
+          }
+          return;
+        } catch (error) {
+          lastError = error as Error;
+          this.logger.warn(`WS-relay stream failed: ${lastError.message}, trying next`);
+          continue;
+        }
+      }
+
       const client = axios.create({
         baseURL: node.url,
         timeout: 120000,
