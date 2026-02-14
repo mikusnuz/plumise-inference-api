@@ -198,6 +198,7 @@ export class NodeRouterService implements OnModuleDestroy {
       };
 
       // Register all topology nodes into the nodes map
+      let hasNewNodes = false;
       for (const pNode of nodes) {
         if (!pNode.ready || !pNode.httpEndpoint) continue;
         if (!this.isValidNodeUrl(pNode.httpEndpoint)) continue;
@@ -211,7 +212,13 @@ export class NodeRouterService implements OnModuleDestroy {
             consecutiveFailures: 0,
             nodeType: 'unknown',
           });
+          hasNewNodes = true;
         }
+      }
+
+      // Immediately detect node type for newly discovered nodes
+      if (hasNewNodes) {
+        this.checkNodesHealth().catch(() => {});
       }
 
       this.logger.debug(
@@ -341,10 +348,10 @@ export class NodeRouterService implements OnModuleDestroy {
         let priority: number;
         if (nodeInfo.nodeType === 'openai') {
           priority = 0; // Highest — standalone, can handle full inference
-        } else if (pNode.pipelineOrder === 0 && nodeInfo.nodeType === 'pipeline') {
-          priority = 1; // Pipeline entry point
         } else if (nodeInfo.nodeType === 'unknown') {
-          priority = 2; // Unknown — will try OpenAI format
+          priority = 1; // Unknown — likely OpenAI-compatible, try before pipeline
+        } else if (pNode.pipelineOrder === 0 && nodeInfo.nodeType === 'pipeline') {
+          priority = 5; // Pipeline entry point — slow, requires inter-node coordination
         } else {
           priority = 10 + pNode.pipelineOrder; // Pipeline non-first nodes (can't serve alone)
         }
@@ -416,9 +423,11 @@ export class NodeRouterService implements OnModuleDestroy {
         }
       }
 
+      // Pipeline nodes get shorter timeout — inter-node coordination is unreliable
+      const timeout = node.nodeType === 'pipeline' ? 30000 : 120000;
       const client = axios.create({
         baseURL: node.url,
-        timeout: 120000,
+        timeout,
         headers: { 'Content-Type': 'application/json' },
       });
 
@@ -505,9 +514,10 @@ export class NodeRouterService implements OnModuleDestroy {
         }
       }
 
+      const streamTimeout = node.nodeType === 'pipeline' ? 30000 : 120000;
       const client = axios.create({
         baseURL: node.url,
-        timeout: 120000,
+        timeout: streamTimeout,
         headers: { 'Content-Type': 'application/json' },
       });
 
