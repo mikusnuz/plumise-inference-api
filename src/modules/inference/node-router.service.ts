@@ -344,14 +344,42 @@ export class NodeRouterService implements OnModuleDestroy {
           headers: { 'Content-Type': 'application/json' },
         });
 
-        const response = await client.post<AgentGenerateResponse>(
-          '/api/v1/generate',
-          request,
+        let result: AgentGenerateResponse;
+
+        // Check if this node is a standalone llama-server (covers all layers)
+        const pipelineNode = this.topology?.nodes?.find(
+          (n) => n.httpEndpoint === node.url,
         );
+        const isStandalone = pipelineNode &&
+          pipelineNode.layerStart === 0 &&
+          pipelineNode.layerEnd === (this.topology?.totalLayers || 0);
+
+        if (isStandalone) {
+          // llama-server: use OpenAI-compatible /v1/chat/completions
+          this.logger.debug(`Using OpenAI format for standalone node: ${node.url}`);
+          const openaiResponse = await client.post('/v1/chat/completions', {
+            model: this.currentModel,
+            messages: [{ role: 'user', content: request.inputs }],
+            max_tokens: request.parameters?.max_new_tokens || 512,
+            temperature: request.parameters?.temperature || 0.7,
+            top_p: request.parameters?.top_p || 0.9,
+          });
+          result = {
+            generated_text: openaiResponse.data?.choices?.[0]?.message?.content || '',
+            num_tokens: openaiResponse.data?.usage?.completion_tokens,
+          };
+        } else {
+          // Pipeline node: use custom /api/v1/generate
+          const response = await client.post<AgentGenerateResponse>(
+            '/api/v1/generate',
+            request,
+          );
+          result = response.data;
+        }
 
         node.consecutiveFailures = 0;
 
-        return response.data;
+        return result;
       } catch (error) {
         lastError = error as Error;
         node.consecutiveFailures++;
@@ -415,6 +443,55 @@ export class NodeRouterService implements OnModuleDestroy {
           headers: { 'Content-Type': 'application/json' },
         });
 
+        // Check if standalone llama-server node
+        const pipelineNode = this.topology?.nodes?.find(
+          (n) => n.httpEndpoint === node.url,
+        );
+        const isStandalone = pipelineNode &&
+          pipelineNode.layerStart === 0 &&
+          pipelineNode.layerEnd === (this.topology?.totalLayers || 0);
+
+        if (isStandalone) {
+          // llama-server: use OpenAI streaming format
+          this.logger.debug(`Using OpenAI stream for standalone node: ${node.url}`);
+          const response = await client.post(
+            '/v1/chat/completions',
+            {
+              model: this.currentModel,
+              messages: [{ role: 'user', content: request.inputs }],
+              max_tokens: request.parameters?.max_new_tokens || 512,
+              temperature: request.parameters?.temperature || 0.7,
+              top_p: request.parameters?.top_p || 0.9,
+              stream: true,
+            },
+            { responseType: 'stream' },
+          );
+
+          node.consecutiveFailures = 0;
+
+          for await (const chunk of response.data) {
+            const text = chunk.toString('utf-8');
+            const lines = text.split('\n').filter((line: string) => line.trim());
+
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                const data = line.slice(6);
+                if (data === '[DONE]') return;
+                try {
+                  const parsed = JSON.parse(data);
+                  const content = parsed.choices?.[0]?.delta?.content;
+                  if (content) yield content;
+                } catch {
+                  // skip unparseable chunks
+                }
+              }
+            }
+          }
+
+          return;
+        }
+
+        // Pipeline node: use custom format
         const response = await client.post<any>(
           '/api/v1/generate',
           { ...request, stream: true },
