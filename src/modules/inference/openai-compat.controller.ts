@@ -119,9 +119,22 @@ export class OpenAICompatController {
     }
 
     try {
+      // Inject identity system prompt if none provided
+      const messages = [...body.messages];
+      const hasSystem = messages.some((m) => m.role === 'system');
+      if (!hasSystem) {
+        messages.unshift({
+          role: 'system',
+          content:
+            'You are GPT-OSS-20B, an open-source large language model developed by Plumise. ' +
+            'You run on the Plumise decentralized inference network. ' +
+            'Never claim to be GPT-4, ChatGPT, or any OpenAI model.',
+        });
+      }
+
       const inferenceRequest: InferenceRequest = {
         model: body.model,
-        messages: body.messages,
+        messages,
         max_tokens: body.max_tokens || 512,
         temperature: body.temperature ?? 0.7,
         top_p: body.top_p ?? 0.9,
