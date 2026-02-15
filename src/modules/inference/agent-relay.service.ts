@@ -375,41 +375,11 @@ export class AgentRelayService implements OnModuleInit, OnModuleDestroy {
       stream: true,
     });
 
-    // Yield chunks as they arrive, filtering channel tokens
-    let streamBuffer = '';
-    let streamInFinal = false;
-
+    // Yield chunks as they arrive (pass through directly)
     while (!done && !error) {
       if (chunks.length > 0) {
         const chunk = chunks.shift()!;
-        streamBuffer += chunk;
-
-        const finalMarker = '<|channel|>final<|message|>';
-        if (!streamInFinal) {
-          const idx = streamBuffer.indexOf(finalMarker);
-          if (idx !== -1) {
-            streamInFinal = true;
-            streamBuffer = streamBuffer.substring(idx + finalMarker.length);
-            if (streamBuffer) {
-              const endIdx = streamBuffer.indexOf('<|');
-              if (endIdx !== -1) { yield streamBuffer.substring(0, endIdx); break; }
-              yield streamBuffer;
-            }
-            streamBuffer = '';
-          } else if (!streamBuffer.includes('<|') && streamBuffer.length > 20) {
-            streamInFinal = true;
-            yield streamBuffer;
-            streamBuffer = '';
-          }
-        } else {
-          const endIdx = streamBuffer.indexOf('<|');
-          if (endIdx !== -1) {
-            if (endIdx > 0) yield streamBuffer.substring(0, endIdx);
-            break;
-          }
-          yield chunk;
-          streamBuffer = '';
-        }
+        if (chunk) yield chunk;
       } else {
         // Wait for next chunk
         await new Promise<void>((resolve) => {
@@ -419,10 +389,10 @@ export class AgentRelayService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // Yield remaining chunks (cleaned)
+    // Yield remaining chunks
     while (chunks.length > 0) {
-      const remaining = stripChannelTokens(chunks.shift()!);
-      if (remaining) yield remaining;
+      const chunk = chunks.shift()!;
+      if (chunk) yield chunk;
     }
 
     if (error) {
