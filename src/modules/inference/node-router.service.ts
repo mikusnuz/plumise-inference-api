@@ -463,6 +463,11 @@ export class NodeRouterService implements OnModuleDestroy {
         node.consecutiveFailures++;
 
         if (axios.isAxiosError(error)) {
+          const respBody = error.response?.data;
+          if (respBody) {
+            this.logger.warn(`Node ${node.url} HTTP ${error.response?.status} body: ${JSON.stringify(respBody).slice(0, 500)}`);
+          }
+
           if (error.code === 'ECONNREFUSED' || error.code === 'ECONNABORTED') {
             this.logger.warn(`Node ${node.url} unreachable, trying next node`);
             node.status = 'offline';
