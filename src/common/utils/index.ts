@@ -35,7 +35,10 @@ export function stripChannelTokens(content: string): string {
     return extracted.trim();
   }
 
-  // Fallback: strip any channel/control tokens
+  // Fallback: strip any channel/control tokens (only trim if tokens were actually found)
+  const hasSpecialTokens = /<\|(channel|start|end|return|call)\|>/.test(content);
+  if (!hasSpecialTokens) return content;
+
   return content
     .replace(/<\|channel\|>[^<]*<\|message\|>/g, '')
     .replace(/<\|start\|>[^<]*/g, '')
