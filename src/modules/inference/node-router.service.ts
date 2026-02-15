@@ -5,6 +5,7 @@ import { stripChannelTokens } from '../../common/utils';
 
 export interface AgentGenerateRequest {
   inputs: string;
+  messages?: { role: string; content: string }[];
   parameters?: {
     max_new_tokens?: number;
     temperature?: number;

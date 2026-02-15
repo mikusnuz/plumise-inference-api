@@ -65,6 +65,7 @@ export class InferenceService {
     try {
       const agentResponse = await this.nodeRouter.forwardRequest({
         inputs: promptText,
+        messages: request.messages,
         parameters: {
           max_new_tokens: request.max_tokens,
           temperature: request.temperature ?? 0.7,
@@ -189,6 +190,7 @@ export class InferenceService {
 
       for await (const chunk of this.nodeRouter.forwardStreamRequest({
         inputs: promptText,
+        messages: request.messages,
         parameters: {
           max_new_tokens: request.max_tokens,
           temperature: request.temperature ?? 0.7,

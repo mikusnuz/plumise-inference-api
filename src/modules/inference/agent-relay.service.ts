@@ -310,8 +310,10 @@ export class AgentRelayService implements OnModuleInit, OnModuleDestroy {
 
       this.pendingRequests.set(id, { resolve, reject, timer });
 
-      // Convert AgentGenerateRequest to OpenAI chat format for the agent
-      const messages = [{ role: 'user', content: request.inputs }];
+      // Prefer original chat messages; fall back to wrapping inputs as user message
+      const messages = request.messages?.length
+        ? request.messages
+        : [{ role: 'user', content: request.inputs }];
       this.sendJson(agent.ws, {
         type: 'request',
         id,
@@ -363,8 +365,10 @@ export class AgentRelayService implements OnModuleInit, OnModuleDestroy {
       timer,
     });
 
-    // Send request
-    const messages = [{ role: 'user', content: request.inputs }];
+    // Prefer original chat messages; fall back to wrapping inputs as user message
+    const messages = request.messages?.length
+      ? request.messages
+      : [{ role: 'user', content: request.inputs }];
     this.sendJson(agent.ws, {
       type: 'request',
       id,
