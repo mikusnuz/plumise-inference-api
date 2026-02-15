@@ -142,6 +142,67 @@ export class OpenAICompatController {
         stream: false,
       };
 
+      // --- Real SSE streaming ---
+      if (body.stream) {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('X-Accel-Buffering', 'no');
+
+        const completionId = `chatcmpl-${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const created = Math.floor(Date.now() / 1000);
+
+        // Role chunk
+        res.write(`data: ${JSON.stringify({
+          id: completionId,
+          object: 'chat.completion.chunk',
+          created,
+          model: body.model,
+          choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }],
+        })}\n\n`);
+
+        try {
+          for await (const chunk of this.inferenceService.streamInference(
+            inferenceRequest,
+            'openai-compat',
+            'pro',
+          )) {
+            const cleaned = stripChannelTokens(chunk);
+            if (cleaned) {
+              res.write(`data: ${JSON.stringify({
+                id: completionId,
+                object: 'chat.completion.chunk',
+                created,
+                model: body.model,
+                choices: [{ index: 0, delta: { content: cleaned }, finish_reason: null }],
+              })}\n\n`);
+            }
+          }
+        } catch (streamError) {
+          const errMsg = streamError instanceof Error ? streamError.message : 'Stream error';
+          res.write(`data: ${JSON.stringify({
+            id: completionId,
+            object: 'chat.completion.chunk',
+            created,
+            model: body.model,
+            choices: [{ index: 0, delta: { content: `\n[Error: ${errMsg}]` }, finish_reason: null }],
+          })}\n\n`);
+        }
+
+        // Final chunk
+        res.write(`data: ${JSON.stringify({
+          id: completionId,
+          object: 'chat.completion.chunk',
+          created,
+          model: body.model,
+          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+        })}\n\n`);
+        res.write('data: [DONE]\n\n');
+        res.end();
+        return;
+      }
+
+      // --- Non-streaming response ---
       const result = await this.inferenceService.runInference(
         inferenceRequest,
         'openai-compat',
@@ -152,52 +213,6 @@ export class OpenAICompatController {
       const completionId = `chatcmpl-${result.id}`;
       const created = Math.floor(Date.now() / 1000);
 
-      // SSE streaming response (simulated from complete result)
-      if (body.stream) {
-        res.setHeader('Content-Type', 'text/event-stream');
-        res.setHeader('Cache-Control', 'no-cache');
-        res.setHeader('Connection', 'keep-alive');
-        res.setHeader('X-Accel-Buffering', 'no');
-
-        // Role chunk
-        const roleChunk = {
-          id: completionId,
-          object: 'chat.completion.chunk',
-          created,
-          model: body.model,
-          choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }],
-        };
-        res.write(`data: ${JSON.stringify(roleChunk)}\n\n`);
-
-        // Content chunks (split by words for natural streaming)
-        const words = responseContent.split(/(\s+)/);
-        for (const word of words) {
-          if (!word) continue;
-          const chunk = {
-            id: completionId,
-            object: 'chat.completion.chunk',
-            created,
-            model: body.model,
-            choices: [{ index: 0, delta: { content: word }, finish_reason: null }],
-          };
-          res.write(`data: ${JSON.stringify(chunk)}\n\n`);
-        }
-
-        // Final chunk
-        const doneChunk = {
-          id: completionId,
-          object: 'chat.completion.chunk',
-          created,
-          model: body.model,
-          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
-        };
-        res.write(`data: ${JSON.stringify(doneChunk)}\n\n`);
-        res.write('data: [DONE]\n\n');
-        res.end();
-        return;
-      }
-
-      // Non-streaming response
       const response: OpenAIChatResponse = {
         id: completionId,
         object: 'chat.completion',

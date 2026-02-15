@@ -588,7 +588,17 @@ export class NodeRouterService implements OnModuleDestroy {
               if (line.startsWith('data: ')) {
                 const data = line.slice(6);
                 if (data === '[DONE]') return;
-                yield data;
+                try {
+                  const parsed = JSON.parse(data);
+                  if (parsed.token) {
+                    yield parsed.token;
+                  } else if (parsed.error) {
+                    throw new Error(parsed.error);
+                  }
+                } catch (parseErr) {
+                  // If not JSON, yield raw data
+                  yield data;
+                }
               }
             }
           }
