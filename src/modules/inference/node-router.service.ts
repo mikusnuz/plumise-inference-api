@@ -18,6 +18,7 @@ export interface AgentGenerateRequest {
 export interface AgentGenerateResponse {
   generated_text: string;
   num_tokens?: number;
+  agent_address?: string;
 }
 
 export interface PipelineNode {
@@ -58,6 +59,7 @@ export class NodeRouterService implements OnModuleDestroy {
 
   private nodes: Map<string, NodeInfo> = new Map();
   private currentNodeIndex = 0;
+  public lastStreamAgentAddress: string | null = null;
   private healthCheckTimer: NodeJS.Timeout | null = null;
   private topologyRefreshTimer: NodeJS.Timeout | null = null;
   private topology: PipelineTopology | null = null;
@@ -417,6 +419,7 @@ export class NodeRouterService implements OnModuleDestroy {
         try {
           this.logger.debug(`Routing to WS-relay agent: ${node.address}`);
           const result = await this.agentRelay.sendRequest(node.address, request);
+          result.agent_address = node.address;
           return result;
         } catch (error) {
           lastError = error as Error;
@@ -458,6 +461,7 @@ export class NodeRouterService implements OnModuleDestroy {
         }
 
         node.consecutiveFailures = 0;
+        result.agent_address = node.address;
         return result;
       } catch (error) {
         lastError = error as Error;
@@ -510,6 +514,7 @@ export class NodeRouterService implements OnModuleDestroy {
       if (node.nodeType === 'ws-relay' && this.agentRelay) {
         try {
           this.logger.debug(`Streaming from WS-relay agent: ${node.address}`);
+          this.lastStreamAgentAddress = node.address;
           for await (const chunk of this.agentRelay.sendStreamRequest(node.address, request)) {
             yield chunk;
           }
@@ -547,6 +552,7 @@ export class NodeRouterService implements OnModuleDestroy {
 
           node.consecutiveFailures = 0;
           node.nodeType = 'openai';
+          this.lastStreamAgentAddress = node.address;
 
           for await (const chunk of response.data) {
             const text = chunk.toString('utf-8');

@@ -5,6 +5,7 @@ import { PaymentService } from '../payment/payment.service';
 import { InferenceRequest, InferenceResponse, ChatMessage } from '../../common/interfaces';
 import { generateRequestId, estimateTokens } from '../../common/utils';
 import { NodeRouterService } from './node-router.service';
+import { UsageTrackerService } from './usage-tracker.service';
 
 @Injectable()
 export class InferenceService {
@@ -15,6 +16,7 @@ export class InferenceService {
     private readonly rateLimitService: RateLimitService,
     private readonly nodeRouter: NodeRouterService,
     private readonly paymentService: PaymentService,
+    private readonly usageTracker: UsageTrackerService,
   ) {}
 
   async runInference(
@@ -92,6 +94,10 @@ export class InferenceService {
       this.logger.log(
         `Inference ${requestId} completed: ${totalTokens} tokens, ${latencyMs}ms`,
       );
+
+      if (agentResponse.agent_address) {
+        this.usageTracker.recordUsage(agentResponse.agent_address, totalTokens, latencyMs);
+      }
 
       const response: InferenceResponse = {
         id: requestId,
@@ -218,6 +224,11 @@ export class InferenceService {
       this.logger.log(
         `Streaming inference ${requestId} completed: ${totalTokens} tokens, ${latencyMs}ms`,
       );
+
+      const streamAgent = this.nodeRouter.lastStreamAgentAddress;
+      if (streamAgent) {
+        this.usageTracker.recordUsage(streamAgent, totalTokens, latencyMs);
+      }
     } catch (error) {
       this.logger.error(`Streaming inference ${requestId} failed: ${error.message}`);
       throw error;

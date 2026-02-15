@@ -5,6 +5,7 @@ import { InferenceService } from './inference.service';
 import { InferenceGateway } from './inference.gateway';
 import { NodeRouterService } from './node-router.service';
 import { AgentRelayService } from './agent-relay.service';
+import { UsageTrackerService } from './usage-tracker.service';
 import { OpenAICompatController } from './openai-compat.controller';
 import { ModelModule } from '../model/model.module';
 import { RateLimitModule } from '../rate-limit/rate-limit.module';
@@ -30,6 +31,7 @@ import { ChainModule } from '../chain/chain.module';
     InferenceGateway,
     NodeRouterService,
     AgentRelayService,
+    UsageTrackerService,
   ],
   exports: [InferenceService],
 })
