@@ -13,6 +13,12 @@ export class AppController {
     return this.appService.getHealth();
   }
 
+  @Get('health')
+  @ApiOperation({ summary: 'Health check (alias)' })
+  getHealthAlias() {
+    return this.appService.getHealth();
+  }
+
   @Get('api/v1/health')
   @ApiOperation({ summary: 'API health check' })
   getApiHealth() {
