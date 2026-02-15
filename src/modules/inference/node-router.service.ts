@@ -424,8 +424,8 @@ export class NodeRouterService implements OnModuleDestroy {
         }
       }
 
-      // Pipeline nodes get shorter timeout — inter-node coordination is unreliable
-      const timeout = node.nodeType === 'pipeline' ? 30000 : 120000;
+      // CPU-based pipeline inference can take 30s+ for long prompts (prefill phase)
+      const timeout = 120000;
       const client = axios.create({
         baseURL: node.url,
         timeout,
@@ -520,7 +520,7 @@ export class NodeRouterService implements OnModuleDestroy {
         }
       }
 
-      const streamTimeout = node.nodeType === 'pipeline' ? 30000 : 120000;
+      const streamTimeout = 120000;
       const client = axios.create({
         baseURL: node.url,
         timeout: streamTimeout,
