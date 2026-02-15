@@ -1,6 +1,7 @@
 import { Injectable, Inject, Logger, ServiceUnavailableException, OnModuleDestroy, Optional } from '@nestjs/common';
 import axios from 'axios';
 import { AgentRelayService } from './agent-relay.service';
+import { stripChannelTokens } from '../../common/utils';
 
 export interface AgentGenerateRequest {
   inputs: string;
@@ -383,7 +384,7 @@ export class NodeRouterService implements OnModuleDestroy {
       top_p: request.parameters?.top_p || 0.9,
     });
     return {
-      generated_text: resp.data?.choices?.[0]?.message?.content || '',
+      generated_text: stripChannelTokens(resp.data?.choices?.[0]?.message?.content || ''),
       num_tokens: resp.data?.usage?.completion_tokens,
     };
   }
@@ -541,6 +542,12 @@ export class NodeRouterService implements OnModuleDestroy {
           node.consecutiveFailures = 0;
           node.nodeType = 'openai';
 
+          // Track whether we've seen the final channel marker.
+          // The model may emit analysis/commentary channels before final.
+          // We buffer until we see <|channel|>final<|message|>, then emit.
+          let buffer = '';
+          let inFinalChannel = false;
+
           for await (const chunk of response.data) {
             const text = chunk.toString('utf-8');
             const lines = text.split('\n').filter((line: string) => line.trim());
@@ -552,12 +559,49 @@ export class NodeRouterService implements OnModuleDestroy {
                 try {
                   const parsed = JSON.parse(data);
                   const content = parsed.choices?.[0]?.delta?.content;
-                  if (content) yield content;
+                  if (content) {
+                    buffer += content;
+
+                    // Check if we've entered the final channel
+                    const finalMarker = '<|channel|>final<|message|>';
+                    if (!inFinalChannel) {
+                      const idx = buffer.indexOf(finalMarker);
+                      if (idx !== -1) {
+                        inFinalChannel = true;
+                        buffer = buffer.substring(idx + finalMarker.length);
+                        if (buffer) yield stripChannelTokens(buffer);
+                        buffer = '';
+                      }
+                      // If no channel tokens at all, assume direct output
+                      if (!buffer.includes('<|') && !inFinalChannel && buffer.length > 20) {
+                        inFinalChannel = true;
+                        yield buffer;
+                        buffer = '';
+                      }
+                    } else {
+                      // In final channel — emit but strip any trailing tokens
+                      const endIdx = buffer.indexOf('<|');
+                      if (endIdx !== -1) {
+                        if (endIdx > 0) yield buffer.substring(0, endIdx);
+                        return; // Hit end token, stop
+                      }
+                      yield content;
+                      buffer = '';
+                    }
+                  }
                 } catch {
                   // skip unparseable chunks
                 }
               }
             }
+          }
+
+          // Flush remaining buffer
+          if (buffer && inFinalChannel) {
+            yield stripChannelTokens(buffer);
+          } else if (buffer && !inFinalChannel) {
+            // Never saw a channel token — emit everything (cleaned)
+            yield stripChannelTokens(buffer);
           }
 
           return;

@@ -13,6 +13,7 @@ import { Response } from 'express';
 import { InferenceService } from './inference.service';
 import { ModelService } from '../model/model.service';
 import { InferenceRequest } from '../../common/interfaces';
+import { stripChannelTokens } from '../../common/utils';
 
 interface OpenAIChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -147,7 +148,7 @@ export class OpenAICompatController {
         'pro',
       );
 
-      const responseContent = result.choices[0]?.message?.content || '';
+      const responseContent = stripChannelTokens(result.choices[0]?.message?.content || '');
       const completionId = `chatcmpl-${result.id}`;
       const created = Math.floor(Date.now() / 1000);
 

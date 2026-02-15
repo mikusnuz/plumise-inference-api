@@ -8,6 +8,7 @@ import { HttpAdapterHost } from '@nestjs/core';
 import * as WebSocket from 'ws';
 import { ChainService } from '../chain/chain.service';
 import { AgentGenerateRequest, AgentGenerateResponse } from './node-router.service';
+import { stripChannelTokens } from '../../common/utils';
 
 interface ConnectedAgent {
   ws: WebSocket;
@@ -210,7 +211,7 @@ export class AgentRelayService implements OnModuleInit, OnModuleDestroy {
           clearTimeout(pending.timer);
           this.pendingRequests.delete(msg.id);
           pending.resolve({
-            generated_text: msg.choices?.[0]?.message?.content || '',
+            generated_text: stripChannelTokens(msg.choices?.[0]?.message?.content || ''),
             num_tokens: msg.usage?.completion_tokens,
           });
         }
@@ -374,10 +375,41 @@ export class AgentRelayService implements OnModuleInit, OnModuleDestroy {
       stream: true,
     });
 
-    // Yield chunks as they arrive
+    // Yield chunks as they arrive, filtering channel tokens
+    let streamBuffer = '';
+    let streamInFinal = false;
+
     while (!done && !error) {
       if (chunks.length > 0) {
-        yield chunks.shift()!;
+        const chunk = chunks.shift()!;
+        streamBuffer += chunk;
+
+        const finalMarker = '<|channel|>final<|message|>';
+        if (!streamInFinal) {
+          const idx = streamBuffer.indexOf(finalMarker);
+          if (idx !== -1) {
+            streamInFinal = true;
+            streamBuffer = streamBuffer.substring(idx + finalMarker.length);
+            if (streamBuffer) {
+              const endIdx = streamBuffer.indexOf('<|');
+              if (endIdx !== -1) { yield streamBuffer.substring(0, endIdx); break; }
+              yield streamBuffer;
+            }
+            streamBuffer = '';
+          } else if (!streamBuffer.includes('<|') && streamBuffer.length > 20) {
+            streamInFinal = true;
+            yield streamBuffer;
+            streamBuffer = '';
+          }
+        } else {
+          const endIdx = streamBuffer.indexOf('<|');
+          if (endIdx !== -1) {
+            if (endIdx > 0) yield streamBuffer.substring(0, endIdx);
+            break;
+          }
+          yield chunk;
+          streamBuffer = '';
+        }
       } else {
         // Wait for next chunk
         await new Promise<void>((resolve) => {
@@ -387,9 +419,10 @@ export class AgentRelayService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // Yield remaining chunks
+    // Yield remaining chunks (cleaned)
     while (chunks.length > 0) {
-      yield chunks.shift()!;
+      const remaining = stripChannelTokens(chunks.shift()!);
+      if (remaining) yield remaining;
     }
 
     if (error) {
