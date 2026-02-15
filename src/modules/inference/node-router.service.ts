@@ -378,7 +378,7 @@ export class NodeRouterService implements OnModuleDestroy {
     const resp = await client.post('/v1/chat/completions', {
       model: this.currentModel,
       messages: [{ role: 'user', content: request.inputs }],
-      max_tokens: request.parameters?.max_new_tokens || 512,
+      max_tokens: request.parameters?.max_new_tokens || 4096,
       temperature: request.parameters?.temperature || 0.7,
       top_p: request.parameters?.top_p || 0.9,
     });
@@ -530,7 +530,7 @@ export class NodeRouterService implements OnModuleDestroy {
             {
               model: this.currentModel,
               messages: [{ role: 'user', content: request.inputs }],
-              max_tokens: request.parameters?.max_new_tokens || 512,
+              max_tokens: request.parameters?.max_new_tokens || 4096,
               temperature: request.parameters?.temperature || 0.7,
               top_p: request.parameters?.top_p || 0.9,
               stream: true,
