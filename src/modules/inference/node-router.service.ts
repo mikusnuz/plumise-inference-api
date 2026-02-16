@@ -662,9 +662,16 @@ export class NodeRouterService implements OnModuleDestroy {
         if (node.nodeType === 'ws-relay' && this.agentRelay) {
           this.logger.debug(`[attempt ${attempt + 1}/${maxRetries}] Streaming from WS-relay agent: ${node.address}${accumulatedTokens ? ' (continuation)' : ''}`);
           this.lastStreamAgentAddress = node.address;
+          const prevAccumulated = accumulatedTokens.length;
           for await (const chunk of this.agentRelay.sendStreamRequest(node.address, effectiveRequest)) {
             accumulatedTokens += chunk;
             yield chunk;
+          }
+          // If stream completed but produced zero new tokens, treat as failure and retry
+          if (accumulatedTokens.length === prevAccumulated) {
+            this.logger.warn(`WS-relay agent ${node.address} returned 0 tokens, treating as failure`);
+            this.markNodeFailed(node);
+            continue; // retry with different node
           }
           node.consecutiveFailures = 0;
           return;
