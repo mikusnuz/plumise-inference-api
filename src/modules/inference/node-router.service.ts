@@ -582,6 +582,33 @@ export class NodeRouterService implements OnModuleDestroy {
     );
   }
 
+  /**
+   * Build a continuation request that includes already-generated tokens.
+   * The new node receives the partial response as context and continues from there.
+   */
+  private buildContinuationRequest(
+    original: AgentGenerateRequest,
+    accumulatedTokens: string,
+  ): AgentGenerateRequest {
+    // For messages-based requests, append partial assistant response
+    if (original.messages?.length) {
+      return {
+        ...original,
+        messages: [
+          ...original.messages,
+          { role: 'assistant', content: accumulatedTokens },
+          { role: 'user', content: 'Continue generating from exactly where you left off. Do not repeat any text.' },
+        ],
+      };
+    }
+
+    // For inputs-based requests, embed the partial output in the prompt
+    return {
+      ...original,
+      inputs: `${original.inputs}\n\nAssistant (partial, continue from here): ${accumulatedTokens}`,
+    };
+  }
+
   async *forwardStreamRequest(
     request: AgentGenerateRequest,
   ): AsyncGenerator<string> {
@@ -596,6 +623,7 @@ export class NodeRouterService implements OnModuleDestroy {
     let lastError: Error | null = null;
     const excluded = new Set<string>();
     const maxRetries = Math.min(candidates.length, 5);
+    let accumulatedTokens = '';
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       const node = this.selectNode(candidates, excluded);
@@ -604,12 +632,18 @@ export class NodeRouterService implements OnModuleDestroy {
       excluded.add(node.url);
       this.inFlight.acquire(node.url);
 
+      // Use continuation request if we have partial output from a previous failed attempt
+      const effectiveRequest = accumulatedTokens
+        ? this.buildContinuationRequest(request, accumulatedTokens)
+        : request;
+
       try {
         // WebSocket relay — stream through connected agent
         if (node.nodeType === 'ws-relay' && this.agentRelay) {
-          this.logger.debug(`[attempt ${attempt + 1}/${maxRetries}] Streaming from WS-relay agent: ${node.address}`);
+          this.logger.debug(`[attempt ${attempt + 1}/${maxRetries}] Streaming from WS-relay agent: ${node.address}${accumulatedTokens ? ' (continuation)' : ''}`);
           this.lastStreamAgentAddress = node.address;
-          for await (const chunk of this.agentRelay.sendStreamRequest(node.address, request)) {
+          for await (const chunk of this.agentRelay.sendStreamRequest(node.address, effectiveRequest)) {
+            accumulatedTokens += chunk;
             yield chunk;
           }
           node.consecutiveFailures = 0;
@@ -625,15 +659,21 @@ export class NodeRouterService implements OnModuleDestroy {
         });
 
         if (node.nodeType === 'openai' || node.nodeType === 'unknown') {
-          this.logger.debug(`[attempt ${attempt + 1}/${maxRetries}] Streaming from OpenAI-compatible node: ${node.url}`);
+          this.logger.debug(`[attempt ${attempt + 1}/${maxRetries}] Streaming from OpenAI-compatible node: ${node.url}${accumulatedTokens ? ' (continuation)' : ''}`);
+
+          // Build messages: use effectiveRequest for continuation
+          const messages = effectiveRequest.messages?.length
+            ? effectiveRequest.messages
+            : [{ role: 'user', content: effectiveRequest.inputs }];
+
           const response = await client.post(
             '/v1/chat/completions',
             {
               model: this.currentModel,
-              messages: [{ role: 'user', content: request.inputs }],
-              max_tokens: request.parameters?.max_new_tokens || 512,
-              temperature: request.parameters?.temperature || 0.7,
-              top_p: request.parameters?.top_p || 0.9,
+              messages,
+              max_tokens: effectiveRequest.parameters?.max_new_tokens || 512,
+              temperature: effectiveRequest.parameters?.temperature || 0.7,
+              top_p: effectiveRequest.parameters?.top_p || 0.9,
               stream: true,
             },
             { responseType: 'stream' },
@@ -655,6 +695,7 @@ export class NodeRouterService implements OnModuleDestroy {
                   const parsed = JSON.parse(data);
                   const content = parsed.choices?.[0]?.delta?.content;
                   if (content) {
+                    accumulatedTokens += content;
                     yield content;
                   }
                 } catch {
@@ -666,10 +707,10 @@ export class NodeRouterService implements OnModuleDestroy {
 
           return;
         } else if (node.nodeType === 'pipeline') {
-          this.logger.debug(`[attempt ${attempt + 1}/${maxRetries}] Streaming from pipeline node: ${node.url}`);
+          this.logger.debug(`[attempt ${attempt + 1}/${maxRetries}] Streaming from pipeline node: ${node.url}${accumulatedTokens ? ' (continuation)' : ''}`);
           const response = await client.post<any>(
             '/api/v1/generate',
-            { ...request, stream: true },
+            { ...effectiveRequest, stream: true },
             { responseType: 'stream' },
           );
 
@@ -686,11 +727,13 @@ export class NodeRouterService implements OnModuleDestroy {
                 try {
                   const parsed = JSON.parse(data);
                   if (parsed.token) {
+                    accumulatedTokens += parsed.token;
                     yield parsed.token;
                   } else if (parsed.error) {
                     throw new Error(parsed.error);
                   }
                 } catch (parseErr) {
+                  accumulatedTokens += data;
                   yield data;
                 }
               }
@@ -714,7 +757,8 @@ export class NodeRouterService implements OnModuleDestroy {
           }
         }
 
-        this.logger.warn(`[attempt ${attempt + 1}/${maxRetries}] Node ${node.url} stream failed: ${lastError.message}, re-selecting`);
+        const tokenInfo = accumulatedTokens ? ` (${accumulatedTokens.length} chars accumulated, will continue)` : '';
+        this.logger.warn(`[attempt ${attempt + 1}/${maxRetries}] Node ${node.url} stream failed: ${lastError.message}${tokenInfo}, re-selecting`);
       } finally {
         this.inFlight.release(node.url);
       }
