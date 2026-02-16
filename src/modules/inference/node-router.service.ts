@@ -251,7 +251,7 @@ export class NodeRouterService implements OnModuleDestroy {
           this.nodes.set(pNode.httpEndpoint, {
             url: pNode.httpEndpoint,
             address: pNode.address,
-            status: 'online',
+            status: 'offline', // Start offline; health check will promote to online
             lastHealthCheck: 0,
             consecutiveFailures: 0,
             nodeType: 'unknown',
@@ -296,8 +296,8 @@ export class NodeRouterService implements OnModuleDestroy {
             this.nodes.set(node.endpoint, {
               url: node.endpoint,
               address: node.address || '',
-              status: 'online',
-              lastHealthCheck: Date.now(),
+              status: 'offline', // Start offline; health check will promote to online
+              lastHealthCheck: 0,
               consecutiveFailures: 0,
               nodeType: 'unknown',
               capacityScore: 1.0,
