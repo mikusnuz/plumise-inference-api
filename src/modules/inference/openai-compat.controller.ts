@@ -59,6 +59,38 @@ interface OpenAIModelListResponse {
   }[];
 }
 
+// Context budget: reserve tokens for completion, trim old messages if needed
+const MAX_CONTEXT_TOKENS = 28672; // 32768 ctx - 4096 reserved for response
+
+function estimateMessageTokens(messages: OpenAIChatMessage[]): number {
+  let total = 0;
+  for (const msg of messages) {
+    // ~4 chars per token + 4 tokens overhead per message (role, delimiters)
+    total += Math.ceil(msg.content.length / 4) + 4;
+  }
+  return total;
+}
+
+function trimMessages(messages: OpenAIChatMessage[], maxTokens: number): OpenAIChatMessage[] {
+  if (estimateMessageTokens(messages) <= maxTokens) return messages;
+
+  // Separate system messages (keep all) from conversation messages
+  const systemMsgs = messages.filter((m) => m.role === 'system');
+  const convMsgs = messages.filter((m) => m.role !== 'system');
+
+  let budget = maxTokens - estimateMessageTokens(systemMsgs);
+  // Add conversation messages from newest to oldest
+  const kept: OpenAIChatMessage[] = [];
+  for (let i = convMsgs.length - 1; i >= 0; i--) {
+    const cost = Math.ceil(convMsgs[i].content.length / 4) + 4;
+    if (budget - cost < 0) break;
+    kept.unshift(convMsgs[i]);
+    budget -= cost;
+  }
+
+  return [...systemMsgs, ...kept];
+}
+
 @ApiTags('openai-compat')
 @Controller('v1')
 export class OpenAICompatController {
@@ -133,9 +165,11 @@ export class OpenAICompatController {
         });
       }
 
+      const trimmedMessages = trimMessages(messages, MAX_CONTEXT_TOKENS);
+
       const inferenceRequest: InferenceRequest = {
         model: body.model,
-        messages,
+        messages: trimmedMessages,
         max_tokens: body.max_tokens || 4096,
         temperature: body.temperature ?? 0.7,
         top_p: body.top_p ?? 0.9,
