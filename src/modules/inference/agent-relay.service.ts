@@ -21,6 +21,7 @@ interface PendingRequest {
   resolve: (value: AgentGenerateResponse) => void;
   reject: (reason: Error) => void;
   timer: NodeJS.Timeout;
+  agentAddress: string;
 }
 
 interface PendingStreamRequest {
@@ -28,6 +29,7 @@ interface PendingStreamRequest {
   onDone: (usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }) => void;
   onError: (error: Error) => void;
   timer: NodeJS.Timeout;
+  agentAddress: string;
 }
 
 @Injectable()
@@ -273,9 +275,25 @@ export class AgentRelayService implements OnModuleInit, OnModuleDestroy {
   }
 
   private rejectPendingForAgent(address: string) {
-    // We don't track which requests belong to which agent in pendingRequests,
-    // but if the agent disconnects, all in-flight requests to it will timeout.
-    // This is acceptable since timeouts are set per-request.
+    const addr = address.toLowerCase();
+    const disconnectError = new Error(`Agent ${address} disconnected`);
+
+    for (const [id, req] of this.pendingRequests.entries()) {
+      if (req.agentAddress === addr) {
+        clearTimeout(req.timer);
+        this.pendingRequests.delete(id);
+        req.reject(disconnectError);
+        this.logger.warn(`Rejected pending request ${id} — agent disconnected`);
+      }
+    }
+    for (const [id, stream] of this.pendingStreams.entries()) {
+      if (stream.agentAddress === addr) {
+        clearTimeout(stream.timer);
+        this.pendingStreams.delete(id);
+        stream.onError(disconnectError);
+        this.logger.warn(`Rejected pending stream ${id} — agent disconnected`);
+      }
+    }
   }
 
   // ---- Public API for NodeRouterService ----
@@ -308,7 +326,7 @@ export class AgentRelayService implements OnModuleInit, OnModuleDestroy {
         reject(new Error('Request timeout'));
       }, this.REQUEST_TIMEOUT);
 
-      this.pendingRequests.set(id, { resolve, reject, timer });
+      this.pendingRequests.set(id, { resolve, reject, timer, agentAddress: address.toLowerCase() });
 
       // Prefer original chat messages; fall back to wrapping inputs as user message
       const messages = request.messages?.length
@@ -363,6 +381,7 @@ export class AgentRelayService implements OnModuleInit, OnModuleDestroy {
         if (resolveWait) resolveWait();
       },
       timer,
+      agentAddress: address.toLowerCase(),
     });
 
     // Prefer original chat messages; fall back to wrapping inputs as user message
