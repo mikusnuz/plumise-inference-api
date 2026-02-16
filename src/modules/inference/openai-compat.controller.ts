@@ -62,11 +62,30 @@ interface OpenAIModelListResponse {
 }
 
 // Context budget: reserve tokens for completion, trim old messages if needed
-const MAX_CONTEXT_TOKENS = 28672; // 32768 ctx - 4096 reserved for response
+const MAX_CONTEXT_TOKENS = 24576; // 32768 ctx - 8192 reserved for response (generous margin)
 const SUMMARY_TRIGGER_RATIO = 0.6; // Summarize when messages use > 60% of budget
 
+/**
+ * Estimate token count for multi-language text.
+ * ASCII: ~4 chars/token, CJK (Korean/Chinese/Japanese): ~1.5 chars/token.
+ * Previous version used text.length/4 which severely underestimated CJK text (6-8x).
+ */
 function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4) + 4;
+  let count = 0;
+  for (const char of text) {
+    const code = char.codePointAt(0)!;
+    if (code <= 0x7F) {
+      // ASCII: ~4 chars per token
+      count += 0.25;
+    } else if (code <= 0x7FF) {
+      // Extended Latin, Cyrillic, etc: ~2 chars per token
+      count += 0.5;
+    } else {
+      // CJK, Korean, emoji, etc: ~1-2 chars per token (use 1.5 avg)
+      count += 1.5;
+    }
+  }
+  return Math.ceil(count) + 4; // +4 for special tokens overhead
 }
 
 function estimateMessageTokens(messages: OpenAIChatMessage[]): number {
@@ -114,6 +133,9 @@ export class OpenAICompatController {
    */
   private async summarizeIfNeeded(messages: OpenAIChatMessage[]): Promise<OpenAIChatMessage[]> {
     const totalEstimate = estimateMessageTokens(messages);
+    this.logger.log(
+      `Context check: ${messages.length} messages, ~${totalEstimate} est. tokens (budget: ${MAX_CONTEXT_TOKENS})`,
+    );
     if (totalEstimate <= MAX_CONTEXT_TOKENS) return messages;
 
     const systemMsgs = messages.filter((m) => m.role === 'system');
@@ -290,14 +312,19 @@ export class OpenAICompatController {
           }
         }, 15000);
 
+        let totalChunks = 0;
+        let sentChunks = 0;
+        let strippedChunks = 0;
         try {
           for await (const chunk of this.inferenceService.streamInference(
             inferenceRequest,
             'openai-compat',
             'pro',
           )) {
+            totalChunks++;
             const cleaned = stripChannelTokens(chunk);
             if (cleaned) {
+              sentChunks++;
               res.write(`data: ${JSON.stringify({
                 id: completionId,
                 object: 'chat.completion.chunk',
@@ -305,6 +332,11 @@ export class OpenAICompatController {
                 model: body.model,
                 choices: [{ index: 0, delta: { content: cleaned }, finish_reason: null }],
               })}\n\n`);
+            } else {
+              strippedChunks++;
+              if (strippedChunks <= 3) {
+                this.logger.debug(`Stripped chunk #${strippedChunks}: raw=${JSON.stringify(chunk).slice(0, 100)}`);
+              }
             }
           }
         } catch (streamError) {
@@ -318,6 +350,9 @@ export class OpenAICompatController {
           })}\n\n`);
         } finally {
           clearInterval(heartbeat);
+          this.logger.log(
+            `Stream stats: ${totalChunks} total chunks, ${sentChunks} sent, ${strippedChunks} stripped`,
+          );
         }
 
         // Final chunk
