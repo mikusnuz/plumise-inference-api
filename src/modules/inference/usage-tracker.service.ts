@@ -21,7 +21,7 @@ export class UsageTrackerService implements OnModuleDestroy {
     this.oracleApiKey = process.env.ORACLE_API_KEY || '';
 
     if (this.oracleUrl && this.oracleApiKey) {
-      this.reportTimer = setInterval(() => this.reportToOracle(), 60_000);
+      this.reportTimer = setInterval(() => this.reportToOracle(), 10_000);
       this.logger.log(`Usage tracking enabled, reporting to ${this.oracleUrl}`);
     } else {
       this.logger.warn('Usage tracking disabled: ORACLE_API_URL or ORACLE_API_KEY not set');
