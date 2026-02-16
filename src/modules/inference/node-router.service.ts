@@ -390,14 +390,16 @@ export class NodeRouterService implements OnModuleDestroy {
   private getCandidateNodes(): NodeInfo[] {
     const candidates: NodeInfo[] = [];
     const seen = new Set<string>();
+    const seenAddresses = new Set<string>(); // Deduplicate by address (WS relay vs HTTP)
     const now = Date.now();
 
-    // Add WebSocket-connected agents
+    // Add WebSocket-connected agents (preferred over HTTP for same node)
     if (this.agentRelay?.hasConnectedAgents()) {
       for (const agent of this.agentRelay.getConnectedAgents()) {
         const key = `ws-relay://${agent.address}`;
         if (seen.has(key)) continue;
         seen.add(key);
+        seenAddresses.add(agent.address.toLowerCase());
         candidates.push({
           url: key,
           address: agent.address,
@@ -411,16 +413,18 @@ export class NodeRouterService implements OnModuleDestroy {
       }
     }
 
-    // Add topology nodes
+    // Add topology nodes (skip if already added via WS relay)
     if (this.topology?.nodes?.length) {
       for (const pNode of this.topology.nodes) {
         if (!pNode.ready || !pNode.httpEndpoint) continue;
+        if (seenAddresses.has(pNode.address.toLowerCase())) continue;
 
         const nodeInfo = this.nodes.get(pNode.httpEndpoint);
         if (!nodeInfo || nodeInfo.status === 'offline') continue;
         if (nodeInfo.cooldownUntil > now) continue;
         if (seen.has(nodeInfo.url)) continue;
         seen.add(nodeInfo.url);
+        seenAddresses.add(pNode.address.toLowerCase());
 
         // Skip pipeline non-entry nodes (can't serve alone)
         if (nodeInfo.nodeType === 'pipeline' && pNode.pipelineOrder !== 0) continue;
@@ -429,10 +433,11 @@ export class NodeRouterService implements OnModuleDestroy {
       }
     }
 
-    // Add static/discovered nodes not in topology
+    // Add static/discovered nodes not in topology (skip if address already seen)
     for (const nodeInfo of this.nodes.values()) {
       if (nodeInfo.status === 'offline') continue;
       if (nodeInfo.cooldownUntil > now) continue;
+      if (nodeInfo.address && seenAddresses.has(nodeInfo.address.toLowerCase())) continue;
       if (seen.has(nodeInfo.url)) continue;
       seen.add(nodeInfo.url);
       candidates.push(nodeInfo);
