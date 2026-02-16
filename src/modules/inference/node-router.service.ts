@@ -162,6 +162,10 @@ export class NodeRouterService implements OnModuleDestroy {
 
   private initializeNodes() {
     for (const url of this.nodeUrls) {
+      if (!this.isValidNodeUrl(url)) {
+        this.logger.warn(`Skipping invalid static node URL: ${url}`);
+        continue;
+      }
       this.nodes.set(url, {
         url,
         address: '',
@@ -217,6 +221,15 @@ export class NodeRouterService implements OnModuleDestroy {
         pipelineOrder: n.pipelineOrder,
         ready: n.ready,
       }));
+
+      // Cache benchmark data from topology nodes
+      for (const raw of (data.nodes || [])) {
+        const addr = (raw.nodeAddress || raw.address || '').toLowerCase();
+        const benchmark = raw.benchmarkTokPerSec;
+        if (addr && benchmark > 0) {
+          this.capacityCache.set(addr, benchmark);
+        }
+      }
 
       const totalLayers = nodes.length > 0
         ? Math.max(...nodes.map((n) => n.layerEnd))
