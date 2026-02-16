@@ -22,16 +22,6 @@ export class ModelService implements OnModuleInit {
         status: 'available',
         totalLayers: 24,
       },
-      {
-        id: 'bigscience/bloom-560m',
-        name: 'BLOOM 560M',
-        description: 'BigScience BLOOM 560M parameter model (for development)',
-        max_tokens: 2048,
-        tier: 'free',
-        nodes: 2,
-        status: 'available',
-        totalLayers: 24,
-      },
     ];
 
     for (const model of modelsList) {
