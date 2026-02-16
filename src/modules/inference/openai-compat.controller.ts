@@ -7,11 +7,13 @@ import {
   Res,
   HttpException,
   HttpStatus,
+  Logger,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Response } from 'express';
 import { InferenceService } from './inference.service';
 import { ModelService } from '../model/model.service';
+import { NodeRouterService } from './node-router.service';
 import { InferenceRequest } from '../../common/interfaces';
 import { stripChannelTokens } from '../../common/utils';
 
@@ -61,28 +63,31 @@ interface OpenAIModelListResponse {
 
 // Context budget: reserve tokens for completion, trim old messages if needed
 const MAX_CONTEXT_TOKENS = 28672; // 32768 ctx - 4096 reserved for response
+const SUMMARY_TRIGGER_RATIO = 0.6; // Summarize when messages use > 60% of budget
+
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4) + 4;
+}
 
 function estimateMessageTokens(messages: OpenAIChatMessage[]): number {
   let total = 0;
   for (const msg of messages) {
-    // ~4 chars per token + 4 tokens overhead per message (role, delimiters)
-    total += Math.ceil(msg.content.length / 4) + 4;
+    total += estimateTokens(msg.content);
   }
   return total;
 }
 
+/** Simple fallback: drop oldest non-system messages */
 function trimMessages(messages: OpenAIChatMessage[], maxTokens: number): OpenAIChatMessage[] {
   if (estimateMessageTokens(messages) <= maxTokens) return messages;
 
-  // Separate system messages (keep all) from conversation messages
   const systemMsgs = messages.filter((m) => m.role === 'system');
   const convMsgs = messages.filter((m) => m.role !== 'system');
 
   let budget = maxTokens - estimateMessageTokens(systemMsgs);
-  // Add conversation messages from newest to oldest
   const kept: OpenAIChatMessage[] = [];
   for (let i = convMsgs.length - 1; i >= 0; i--) {
-    const cost = Math.ceil(convMsgs[i].content.length / 4) + 4;
+    const cost = estimateTokens(convMsgs[i].content);
     if (budget - cost < 0) break;
     kept.unshift(convMsgs[i]);
     budget -= cost;
@@ -94,10 +99,92 @@ function trimMessages(messages: OpenAIChatMessage[], maxTokens: number): OpenAIC
 @ApiTags('openai-compat')
 @Controller('v1')
 export class OpenAICompatController {
+  private readonly logger = new Logger(OpenAICompatController.name);
+
   constructor(
     private readonly inferenceService: InferenceService,
     private readonly modelService: ModelService,
+    private readonly nodeRouter: NodeRouterService,
   ) {}
+
+  /**
+   * Summarize old messages via LLM when conversation exceeds context budget.
+   * Returns [system msgs] + [summary as system msg] + [recent conversation msgs].
+   * Falls back to simple trimming on failure.
+   */
+  private async summarizeIfNeeded(messages: OpenAIChatMessage[]): Promise<OpenAIChatMessage[]> {
+    const totalEstimate = estimateMessageTokens(messages);
+    if (totalEstimate <= MAX_CONTEXT_TOKENS) return messages;
+
+    const systemMsgs = messages.filter((m) => m.role === 'system');
+    const convMsgs = messages.filter((m) => m.role !== 'system');
+
+    if (convMsgs.length <= 2) {
+      return trimMessages(messages, MAX_CONTEXT_TOKENS);
+    }
+
+    // Split: keep recent messages within 40% budget, summarize the rest
+    const recentBudget = Math.floor(MAX_CONTEXT_TOKENS * 0.4);
+    const recent: OpenAIChatMessage[] = [];
+    let recentCost = 0;
+    for (let i = convMsgs.length - 1; i >= 0; i--) {
+      const cost = estimateTokens(convMsgs[i].content);
+      if (recentCost + cost > recentBudget) break;
+      recent.unshift(convMsgs[i]);
+      recentCost += cost;
+    }
+
+    const oldMessages = convMsgs.slice(0, convMsgs.length - recent.length);
+    if (oldMessages.length === 0) {
+      return trimMessages(messages, MAX_CONTEXT_TOKENS);
+    }
+
+    // Build summary prompt
+    const conversationText = oldMessages
+      .map((m) => `${m.role}: ${m.content}`)
+      .join('\n');
+
+    try {
+      this.logger.log(
+        `Summarizing ${oldMessages.length} old messages (${estimateMessageTokens(oldMessages)} est. tokens)`,
+      );
+
+      const summaryResponse = await this.nodeRouter.forwardRequest({
+        inputs: '',
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are a conversation summarizer. Summarize the following conversation concisely, ' +
+              'preserving key facts, decisions, and context. Write in the same language as the conversation. ' +
+              'Output ONLY the summary, nothing else.',
+          },
+          { role: 'user', content: conversationText },
+        ],
+        parameters: { max_new_tokens: 1024, temperature: 0.3 },
+      });
+
+      const summary = stripChannelTokens(summaryResponse.generated_text).trim();
+      if (!summary) {
+        this.logger.warn('Summary was empty, falling back to trim');
+        return trimMessages(messages, MAX_CONTEXT_TOKENS);
+      }
+
+      this.logger.log(`Summarized ${oldMessages.length} messages into ${summary.length} chars`);
+
+      return [
+        ...systemMsgs,
+        {
+          role: 'system' as const,
+          content: `[Previous conversation summary]\n${summary}`,
+        },
+        ...recent,
+      ];
+    } catch (error) {
+      this.logger.warn(`Summarization failed: ${error instanceof Error ? error.message : 'Unknown'}, falling back to trim`);
+      return trimMessages(messages, MAX_CONTEXT_TOKENS);
+    }
+  }
 
   @Post('chat/completions')
   @ApiBearerAuth()
@@ -165,11 +252,12 @@ export class OpenAICompatController {
         });
       }
 
-      const trimmedMessages = trimMessages(messages, MAX_CONTEXT_TOKENS);
+      // Summarize old messages if conversation exceeds context budget
+      const processedMessages = await this.summarizeIfNeeded(messages);
 
       const inferenceRequest: InferenceRequest = {
         model: body.model,
-        messages: trimmedMessages,
+        messages: processedMessages,
         max_tokens: body.max_tokens || 4096,
         temperature: body.temperature ?? 0.7,
         top_p: body.top_p ?? 0.9,
