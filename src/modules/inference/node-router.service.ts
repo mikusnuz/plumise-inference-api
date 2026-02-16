@@ -87,6 +87,7 @@ export class NodeRouterService implements OnModuleDestroy {
   private healthCheckTimer: NodeJS.Timeout | null = null;
   private topologyRefreshTimer: NodeJS.Timeout | null = null;
   private topology: PipelineTopology | null = null;
+  private capacityCache: Map<string, number> = new Map(); // address → benchmarkTokPerSec
 
   constructor(
     @Optional() @Inject(AgentRelayService) private readonly agentRelay: AgentRelayService | null,
@@ -299,6 +300,36 @@ export class NodeRouterService implements OnModuleDestroy {
         this.logger.warn(`Failed to refresh nodes from Oracle: ${error.message}`);
       }
     }
+
+    // Fetch capacity data to update node scores
+    try {
+      const capacityResponse = await axios.get(`${this.oracleApiUrl}/api/v1/metrics/capacity`, {
+        timeout: 5000,
+      });
+
+      if (Array.isArray(capacityResponse.data)) {
+        for (const cap of capacityResponse.data) {
+          const addr = (cap.address || '').toLowerCase();
+          if (!addr) continue;
+
+          // Update capacity cache
+          if (cap.benchmarkTokPerSec > 0) {
+            this.capacityCache.set(addr, cap.benchmarkTokPerSec);
+
+            // Find node by address and update capacity score
+            for (const nodeInfo of this.nodes.values()) {
+              if (nodeInfo.address.toLowerCase() === addr) {
+                nodeInfo.capacityScore = cap.benchmarkTokPerSec;
+                break;
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+      // Non-critical: capacity data enhances routing but isn't required
+      this.logger.debug(`Failed to fetch capacity data: ${error instanceof Error ? error.message : 'Unknown'}`);
+    }
   }
 
   private async checkNodesHealth() {
@@ -361,7 +392,7 @@ export class NodeRouterService implements OnModuleDestroy {
           lastHealthCheck: now,
           consecutiveFailures: 0,
           nodeType: 'ws-relay',
-          capacityScore: 1.0, // Phase 2: benchmarkTokPerSec from Oracle
+          capacityScore: this.capacityCache.get(agent.address.toLowerCase()) || 1.0,
           cooldownUntil: 0,
         });
       }
