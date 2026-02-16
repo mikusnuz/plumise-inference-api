@@ -44,6 +44,29 @@ export interface NodeInfo {
   lastHealthCheck: number;
   consecutiveFailures: number;
   nodeType: 'openai' | 'pipeline' | 'ws-relay' | 'unknown';
+  capacityScore: number; // benchmark tok/s or default 1.0
+  cooldownUntil: number; // timestamp — excluded from candidates until this time
+}
+
+/**
+ * Tracks in-flight requests per node to avoid overloading busy nodes.
+ * Used in weighted random selection: weight = capacity / (1 + inFlight)
+ */
+class InFlightTracker {
+  private counts = new Map<string, number>();
+
+  acquire(key: string): void {
+    this.counts.set(key, (this.counts.get(key) || 0) + 1);
+  }
+
+  release(key: string): void {
+    const count = this.counts.get(key) || 0;
+    this.counts.set(key, Math.max(0, count - 1));
+  }
+
+  getCount(key: string): number {
+    return this.counts.get(key) || 0;
+  }
 }
 
 @Injectable()
@@ -54,11 +77,12 @@ export class NodeRouterService implements OnModuleDestroy {
   private readonly healthCheckInterval = 30000;
   private readonly topologyRefreshInterval = 30000;
   private readonly maxConsecutiveFailures = 3;
+  private readonly cooldownDuration = 30000; // 30s cooldown after consecutive failures
   private readonly currentModel: string;
   private readonly allowPrivateIps: boolean;
 
   private nodes: Map<string, NodeInfo> = new Map();
-  private currentNodeIndex = 0;
+  private inFlight = new InFlightTracker();
   public lastStreamAgentAddress: string | null = null;
   private healthCheckTimer: NodeJS.Timeout | null = null;
   private topologyRefreshTimer: NodeJS.Timeout | null = null;
@@ -144,6 +168,8 @@ export class NodeRouterService implements OnModuleDestroy {
         lastHealthCheck: Date.now(),
         consecutiveFailures: 0,
         nodeType: 'unknown',
+        capacityScore: 1.0,
+        cooldownUntil: 0,
       });
     }
   }
@@ -215,6 +241,8 @@ export class NodeRouterService implements OnModuleDestroy {
             lastHealthCheck: 0,
             consecutiveFailures: 0,
             nodeType: 'unknown',
+            capacityScore: 1.0,
+            cooldownUntil: 0,
           });
           hasNewNodes = true;
         }
@@ -258,6 +286,8 @@ export class NodeRouterService implements OnModuleDestroy {
               lastHealthCheck: Date.now(),
               consecutiveFailures: 0,
               nodeType: 'unknown',
+              capacityScore: 1.0,
+              cooldownUntil: 0,
             });
           }
         }
@@ -309,70 +339,101 @@ export class NodeRouterService implements OnModuleDestroy {
   }
 
   /**
-   * Get candidate nodes sorted by priority:
-   * 1. OpenAI-compatible nodes (standalone llama-server) — can handle full model
-   * 2. Pipeline first node (pipelineOrder=0)
-   * 3. Other nodes as fallback
-   * Only returns online nodes.
+   * Get all candidate nodes as a flat pool.
+   * Filters out offline nodes and nodes in cooldown.
+   * No priority sorting — weighted random selection handles distribution.
    */
   private getCandidateNodes(): NodeInfo[] {
-    const candidates: { node: NodeInfo; priority: number }[] = [];
+    const candidates: NodeInfo[] = [];
     const seen = new Set<string>();
+    const now = Date.now();
 
-    // Add WebSocket-connected agents (highest priority — directly reachable)
+    // Add WebSocket-connected agents
     if (this.agentRelay?.hasConnectedAgents()) {
       for (const agent of this.agentRelay.getConnectedAgents()) {
         const key = `ws-relay://${agent.address}`;
         if (seen.has(key)) continue;
         seen.add(key);
         candidates.push({
-          node: {
-            url: key,
-            address: agent.address,
-            status: 'online',
-            lastHealthCheck: Date.now(),
-            consecutiveFailures: 0,
-            nodeType: 'ws-relay',
-          },
-          priority: -1, // Highest priority
+          url: key,
+          address: agent.address,
+          status: 'online',
+          lastHealthCheck: now,
+          consecutiveFailures: 0,
+          nodeType: 'ws-relay',
+          capacityScore: 1.0, // Phase 2: benchmarkTokPerSec from Oracle
+          cooldownUntil: 0,
         });
       }
     }
 
-    // Add topology nodes with priority
+    // Add topology nodes
     if (this.topology?.nodes?.length) {
       for (const pNode of this.topology.nodes) {
         if (!pNode.ready || !pNode.httpEndpoint) continue;
 
         const nodeInfo = this.nodes.get(pNode.httpEndpoint);
         if (!nodeInfo || nodeInfo.status === 'offline') continue;
+        if (nodeInfo.cooldownUntil > now) continue;
         if (seen.has(nodeInfo.url)) continue;
         seen.add(nodeInfo.url);
 
-        let priority: number;
-        if (nodeInfo.nodeType === 'openai') {
-          priority = 0; // Highest — standalone, can handle full inference
-        } else if (nodeInfo.nodeType === 'unknown') {
-          priority = 1; // Unknown — likely OpenAI-compatible, try before pipeline
-        } else if (pNode.pipelineOrder === 0 && nodeInfo.nodeType === 'pipeline') {
-          priority = 5; // Pipeline entry point — slow, requires inter-node coordination
-        } else {
-          priority = 10 + pNode.pipelineOrder; // Pipeline non-first nodes (can't serve alone)
-        }
+        // Skip pipeline non-entry nodes (can't serve alone)
+        if (nodeInfo.nodeType === 'pipeline' && pNode.pipelineOrder !== 0) continue;
 
-        candidates.push({ node: nodeInfo, priority });
+        candidates.push(nodeInfo);
       }
     }
 
     // Add static/discovered nodes not in topology
     for (const nodeInfo of this.nodes.values()) {
       if (nodeInfo.status === 'offline') continue;
+      if (nodeInfo.cooldownUntil > now) continue;
       if (seen.has(nodeInfo.url)) continue;
       seen.add(nodeInfo.url);
-      candidates.push({ node: nodeInfo, priority: 20 });
+      candidates.push(nodeInfo);
     }
 
-    return candidates.sort((a, b) => a.priority - b.priority).map(c => c.node);
+    return candidates;
+  }
+
+  /**
+   * Weighted random selection from candidate pool.
+   * Weight = capacityScore / (1 + inFlightRequests), minimum 0.1
+   * Excludes nodes in the `excluded` set (for retry after failure).
+   */
+  private selectNode(candidates: NodeInfo[], excluded: Set<string> = new Set()): NodeInfo | null {
+    const available = candidates.filter(c => !excluded.has(c.url));
+    if (available.length === 0) return null;
+    if (available.length === 1) return available[0];
+
+    const MIN_WEIGHT = 0.1;
+    const weights = available.map(c => {
+      const base = c.capacityScore || 1.0;
+      const load = this.inFlight.getCount(c.url);
+      return Math.max(base / (1 + load), MIN_WEIGHT);
+    });
+
+    const totalWeight = weights.reduce((a, b) => a + b, 0);
+    let random = Math.random() * totalWeight;
+    for (let i = 0; i < available.length; i++) {
+      random -= weights[i];
+      if (random <= 0) return available[i];
+    }
+    return available[available.length - 1];
+  }
+
+  /**
+   * Mark a node as failed. After maxConsecutiveFailures, apply cooldown.
+   */
+  private markNodeFailed(node: NodeInfo): void {
+    node.consecutiveFailures++;
+    if (node.consecutiveFailures >= this.maxConsecutiveFailures) {
+      node.cooldownUntil = Date.now() + this.cooldownDuration;
+      this.logger.warn(
+        `Node ${node.url} in cooldown for ${this.cooldownDuration / 1000}s after ${node.consecutiveFailures} failures`,
+      );
+    }
   }
 
   private async tryOpenAIRequest(
@@ -412,44 +473,45 @@ export class NodeRouterService implements OnModuleDestroy {
     }
 
     let lastError: Error | null = null;
+    const excluded = new Set<string>();
+    const maxRetries = Math.min(candidates.length, 5);
 
-    for (const node of candidates) {
-      // WebSocket relay — forward through connected agent
-      if (node.nodeType === 'ws-relay' && this.agentRelay) {
-        try {
-          this.logger.debug(`Routing to WS-relay agent: ${node.address}`);
-          const result = await this.agentRelay.sendRequest(node.address, request);
-          result.agent_address = node.address;
-          return result;
-        } catch (error) {
-          lastError = error as Error;
-          this.logger.warn(`WS-relay request failed: ${lastError.message}, trying next`);
-          continue;
-        }
-      }
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      const node = this.selectNode(candidates, excluded);
+      if (!node) break;
 
-      // CPU-based pipeline inference can take 30s+ for long prompts (prefill phase)
-      const timeout = 120000;
-      const client = axios.create({
-        baseURL: node.url,
-        timeout,
-        headers: { 'Content-Type': 'application/json' },
-      });
+      excluded.add(node.url);
+      this.inFlight.acquire(node.url);
 
       try {
+        // WebSocket relay — forward through connected agent
+        if (node.nodeType === 'ws-relay' && this.agentRelay) {
+          this.logger.debug(`[attempt ${attempt + 1}/${maxRetries}] Routing to WS-relay agent: ${node.address}`);
+          const result = await this.agentRelay.sendRequest(node.address, request);
+          result.agent_address = node.address;
+          node.consecutiveFailures = 0;
+          return result;
+        }
+
+        // HTTP node
+        const timeout = 120000;
+        const client = axios.create({
+          baseURL: node.url,
+          timeout,
+          headers: { 'Content-Type': 'application/json' },
+        });
+
         let result: AgentGenerateResponse;
 
         if (node.nodeType === 'pipeline') {
-          this.logger.debug(`Routing to pipeline node: ${node.url}`);
+          this.logger.debug(`[attempt ${attempt + 1}/${maxRetries}] Routing to pipeline node: ${node.url}`);
           result = await this.tryPipelineRequest(client, request);
         } else {
-          // OpenAI or unknown — try OpenAI format first
-          this.logger.debug(`Routing to OpenAI-compatible node: ${node.url}`);
+          this.logger.debug(`[attempt ${attempt + 1}/${maxRetries}] Routing to OpenAI-compatible node: ${node.url}`);
           try {
             result = await this.tryOpenAIRequest(client, request);
             node.nodeType = 'openai';
           } catch (openaiError) {
-            // If 404, this node doesn't support OpenAI — try pipeline format
             if (axios.isAxiosError(openaiError) && openaiError.response?.status === 404) {
               this.logger.debug(`Node ${node.url} doesn't support OpenAI format, trying pipeline`);
               node.nodeType = 'pipeline';
@@ -465,28 +527,21 @@ export class NodeRouterService implements OnModuleDestroy {
         return result;
       } catch (error) {
         lastError = error as Error;
-        node.consecutiveFailures++;
+        this.markNodeFailed(node);
 
         if (axios.isAxiosError(error)) {
           const respBody = error.response?.data;
           if (respBody) {
             this.logger.warn(`Node ${node.url} HTTP ${error.response?.status} body: ${JSON.stringify(respBody).slice(0, 500)}`);
           }
-
           if (error.code === 'ECONNREFUSED' || error.code === 'ECONNABORTED') {
-            this.logger.warn(`Node ${node.url} unreachable, trying next node`);
             node.status = 'offline';
-            continue;
-          }
-
-          if (error.response?.status && error.response.status >= 500) {
-            this.logger.warn(`Node ${node.url} server error ${error.response.status}, trying next`);
-            continue;
           }
         }
 
-        this.logger.warn(`Node ${node.url} failed: ${lastError.message}, trying next`);
-        continue;
+        this.logger.warn(`[attempt ${attempt + 1}/${maxRetries}] Node ${node.url} failed: ${lastError.message}, re-selecting`);
+      } finally {
+        this.inFlight.release(node.url);
       }
     }
 
@@ -508,35 +563,38 @@ export class NodeRouterService implements OnModuleDestroy {
     }
 
     let lastError: Error | null = null;
+    const excluded = new Set<string>();
+    const maxRetries = Math.min(candidates.length, 5);
 
-    for (const node of candidates) {
-      // WebSocket relay — stream through connected agent
-      if (node.nodeType === 'ws-relay' && this.agentRelay) {
-        try {
-          this.logger.debug(`Streaming from WS-relay agent: ${node.address}`);
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      const node = this.selectNode(candidates, excluded);
+      if (!node) break;
+
+      excluded.add(node.url);
+      this.inFlight.acquire(node.url);
+
+      try {
+        // WebSocket relay — stream through connected agent
+        if (node.nodeType === 'ws-relay' && this.agentRelay) {
+          this.logger.debug(`[attempt ${attempt + 1}/${maxRetries}] Streaming from WS-relay agent: ${node.address}`);
           this.lastStreamAgentAddress = node.address;
           for await (const chunk of this.agentRelay.sendStreamRequest(node.address, request)) {
             yield chunk;
           }
+          node.consecutiveFailures = 0;
           return;
-        } catch (error) {
-          lastError = error as Error;
-          this.logger.warn(`WS-relay stream failed: ${lastError.message}, trying next`);
-          continue;
         }
-      }
 
-      const streamTimeout = 120000;
-      const client = axios.create({
-        baseURL: node.url,
-        timeout: streamTimeout,
-        headers: { 'Content-Type': 'application/json' },
-      });
+        // HTTP node
+        const streamTimeout = 120000;
+        const client = axios.create({
+          baseURL: node.url,
+          timeout: streamTimeout,
+          headers: { 'Content-Type': 'application/json' },
+        });
 
-      try {
         if (node.nodeType === 'openai' || node.nodeType === 'unknown') {
-          // Try OpenAI streaming format
-          this.logger.debug(`Streaming from OpenAI-compatible node: ${node.url}`);
+          this.logger.debug(`[attempt ${attempt + 1}/${maxRetries}] Streaming from OpenAI-compatible node: ${node.url}`);
           const response = await client.post(
             '/v1/chat/completions',
             {
@@ -576,9 +634,8 @@ export class NodeRouterService implements OnModuleDestroy {
           }
 
           return;
-        } else {
-          // Pipeline format
-          this.logger.debug(`Streaming from pipeline node: ${node.url}`);
+        } else if (node.nodeType === 'pipeline') {
+          this.logger.debug(`[attempt ${attempt + 1}/${maxRetries}] Streaming from pipeline node: ${node.url}`);
           const response = await client.post<any>(
             '/api/v1/generate',
             { ...request, stream: true },
@@ -603,7 +660,6 @@ export class NodeRouterService implements OnModuleDestroy {
                     throw new Error(parsed.error);
                   }
                 } catch (parseErr) {
-                  // If not JSON, yield raw data
                   yield data;
                 }
               }
@@ -614,46 +670,22 @@ export class NodeRouterService implements OnModuleDestroy {
         }
       } catch (error) {
         lastError = error as Error;
-        node.consecutiveFailures++;
+        this.markNodeFailed(node);
 
         if (axios.isAxiosError(error)) {
           if (error.code === 'ECONNREFUSED' || error.code === 'ECONNABORTED') {
-            this.logger.warn(`Node ${node.url} unreachable during stream, trying next`);
             node.status = 'offline';
-            continue;
           }
 
-          // If OpenAI 404 on unknown node, mark as pipeline and retry
+          // If OpenAI 404 on unknown node, mark as pipeline (will be retried on next select)
           if (error.response?.status === 404 && node.nodeType === 'unknown') {
             node.nodeType = 'pipeline';
-            try {
-              this.logger.debug(`Retrying stream as pipeline format: ${node.url}`);
-              const response = await client.post<any>(
-                '/api/v1/generate',
-                { ...request, stream: true },
-                { responseType: 'stream' },
-              );
-              node.consecutiveFailures = 0;
-              for await (const chunk of response.data) {
-                const text = chunk.toString('utf-8');
-                const lines = text.split('\n').filter((line: string) => line.trim());
-                for (const line of lines) {
-                  if (line.startsWith('data: ')) {
-                    const data = line.slice(6);
-                    if (data === '[DONE]') return;
-                    yield data;
-                  }
-                }
-              }
-              return;
-            } catch {
-              continue;
-            }
           }
         }
 
-        this.logger.warn(`Node ${node.url} stream failed: ${lastError.message}, trying next`);
-        continue;
+        this.logger.warn(`[attempt ${attempt + 1}/${maxRetries}] Node ${node.url} stream failed: ${lastError.message}, re-selecting`);
+      } finally {
+        this.inFlight.release(node.url);
       }
     }
 
