@@ -41,6 +41,7 @@ export class AgentRelayService implements OnModuleInit, OnModuleDestroy {
   private pendingStreams: Map<string, PendingStreamRequest> = new Map();
   private readonly AUTH_TIMEOUT = 10000; // 10s
   private readonly REQUEST_TIMEOUT = 120000; // 2min
+  private readonly FIRST_TOKEN_TIMEOUT = 60000; // 60s — fail fast if no first token
   private pingInterval: NodeJS.Timeout | null = null;
 
   constructor(
@@ -360,15 +361,31 @@ export class AgentRelayService implements OnModuleInit, OnModuleDestroy {
     let done = false;
     let error: Error | null = null;
     let resolveWait: (() => void) | null = null;
+    let firstTokenReceived = false;
 
+    // First-token timeout: fail fast if agent takes too long to start generating
     const timer = setTimeout(() => {
       this.pendingStreams.delete(id);
-      error = new Error('Stream timeout');
+      error = new Error(firstTokenReceived ? 'Stream timeout' : 'First token timeout — agent too slow to respond');
+      this.logger.warn(`Stream ${id} ${firstTokenReceived ? 'timed out' : 'first-token timeout'} for agent ${address}`);
       if (resolveWait) resolveWait();
-    }, this.REQUEST_TIMEOUT);
+    }, firstTokenReceived ? this.REQUEST_TIMEOUT : this.FIRST_TOKEN_TIMEOUT);
 
     this.pendingStreams.set(id, {
       onChunk: (content: string) => {
+        if (!firstTokenReceived) {
+          firstTokenReceived = true;
+          // Upgrade to full request timeout now that tokens are flowing
+          clearTimeout(timer);
+          const stream = this.pendingStreams.get(id);
+          if (stream) {
+            stream.timer = setTimeout(() => {
+              this.pendingStreams.delete(id);
+              error = new Error('Stream timeout');
+              if (resolveWait) resolveWait();
+            }, this.REQUEST_TIMEOUT);
+          }
+        }
         chunks.push(content);
         if (resolveWait) resolveWait();
       },

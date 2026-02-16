@@ -283,6 +283,13 @@ export class OpenAICompatController {
           choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }],
         })}\n\n`);
 
+        // SSE heartbeat: keep connection alive during prefill (every 15s)
+        const heartbeat = setInterval(() => {
+          if (!res.writableEnded) {
+            res.write(`: heartbeat\n\n`);
+          }
+        }, 15000);
+
         try {
           for await (const chunk of this.inferenceService.streamInference(
             inferenceRequest,
@@ -309,6 +316,8 @@ export class OpenAICompatController {
             model: body.model,
             choices: [{ index: 0, delta: { content: `\n[Error: ${errMsg}]` }, finish_reason: null }],
           })}\n\n`);
+        } finally {
+          clearInterval(heartbeat);
         }
 
         // Final chunk

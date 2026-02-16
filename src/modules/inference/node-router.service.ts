@@ -456,11 +456,13 @@ export class NodeRouterService implements OnModuleDestroy {
     if (available.length === 0) return null;
     if (available.length === 1) return available[0];
 
-    const MIN_WEIGHT = 0.1;
+    const MIN_WEIGHT = 0.01;
     const weights = available.map(c => {
+      // Use squared capacity to strongly prefer faster nodes
+      // (100 tok/s vs 10 tok/s → 10000:100 = 100:1 ratio instead of 10:1)
       const base = c.capacityScore || 1.0;
       const load = this.inFlight.getCount(c.url);
-      return Math.max(base / (1 + load), MIN_WEIGHT);
+      return Math.max((base * base) / (1 + load), MIN_WEIGHT);
     });
 
     const totalWeight = weights.reduce((a, b) => a + b, 0);
