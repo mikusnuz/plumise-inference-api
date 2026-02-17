@@ -13,16 +13,6 @@ export class ModelService implements OnModuleInit {
   private initializeModels() {
     const modelsList: ModelInfo[] = [
       {
-        id: 'openai/gpt-oss-20b',
-        name: 'GPT-OSS 20B',
-        description: 'OpenAI GPT-OSS 20B MoE model (21B params, 3.6B active)',
-        max_tokens: 4096,
-        tier: 'free',
-        nodes: 2,
-        status: 'available',
-        totalLayers: 24,
-      },
-      {
         id: 'qwen/qwen3-32b',
         name: 'Qwen3 32B',
         description: 'Qwen3 32B dense model (32B params)',

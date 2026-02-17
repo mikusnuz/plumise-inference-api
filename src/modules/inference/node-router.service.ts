@@ -93,7 +93,7 @@ export class NodeRouterService implements OnModuleDestroy {
     @Optional() @Inject(AgentRelayService) private readonly agentRelay: AgentRelayService | null,
   ) {
     this.oracleApiUrl = process.env.ORACLE_API_URL;
-    this.currentModel = process.env.DEFAULT_MODEL || 'openai/gpt-oss-20b';
+    this.currentModel = process.env.DEFAULT_MODEL || 'qwen/qwen3-32b';
     this.allowPrivateIps = process.env.ALLOW_PRIVATE_IPS !== 'false';
 
     const nodeUrlsEnv = process.env.NODE_URLS || '';
