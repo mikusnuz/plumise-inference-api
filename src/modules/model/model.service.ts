@@ -22,6 +22,26 @@ export class ModelService implements OnModuleInit {
         status: 'available',
         totalLayers: 24,
       },
+      {
+        id: 'qwen/qwen3-32b',
+        name: 'Qwen3 32B',
+        description: 'Qwen3 32B dense model (32B params)',
+        max_tokens: 4096,
+        tier: 'free',
+        nodes: 0,
+        status: 'available',
+        totalLayers: 64,
+      },
+      {
+        id: 'qwen/qwen3.5-397b-a17b',
+        name: 'Qwen3.5 397B',
+        description: 'Qwen3.5 397B MoE model (397B params, 17B active)',
+        max_tokens: 4096,
+        tier: 'pro',
+        nodes: 0,
+        status: 'available',
+        totalLayers: 96,
+      },
     ];
 
     for (const model of modelsList) {
