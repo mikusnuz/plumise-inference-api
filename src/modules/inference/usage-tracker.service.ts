@@ -6,6 +6,7 @@ interface AgentUsage {
   requestCount: number;
   totalLatencyMs: number;
   uptimeStart: number;
+  lastRecordedAt: number; // timestamp of last recordUsage() call
 }
 
 @Injectable()
@@ -36,27 +37,38 @@ export class UsageTrackerService implements OnModuleDestroy {
 
   recordUsage(agentAddress: string, tokens: number, latencyMs: number) {
     const addr = agentAddress.toLowerCase();
+    const now = Math.floor(Date.now() / 1000);
     let usage = this.agentUsage.get(addr);
     if (!usage) {
       usage = {
         tokensProcessed: 0,
         requestCount: 0,
         totalLatencyMs: 0,
-        uptimeStart: Math.floor(Date.now() / 1000),
+        uptimeStart: now,
+        lastRecordedAt: now,
       };
       this.agentUsage.set(addr, usage);
     }
     usage.tokensProcessed += tokens;
     usage.requestCount += 1;
     usage.totalLatencyMs += latencyMs;
+    usage.lastRecordedAt = now;
   }
 
   private async reportToOracle() {
     if (this.agentUsage.size === 0) return;
 
     const now = Math.floor(Date.now() / 1000);
+    const staleThreshold = 60; // remove agents inactive for 60s
 
     for (const [wallet, usage] of this.agentUsage) {
+      // Skip and remove agents that haven't recorded new usage recently
+      if (now - usage.lastRecordedAt > staleThreshold) {
+        this.logger.log(`Removing stale agent usage: ${wallet} (inactive ${now - usage.lastRecordedAt}s)`);
+        this.agentUsage.delete(wallet);
+        continue;
+      }
+
       try {
         const avgLatencyMs = usage.requestCount > 0
           ? Math.round(usage.totalLatencyMs / usage.requestCount)
