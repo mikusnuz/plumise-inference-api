@@ -265,11 +265,16 @@ export class OpenAICompatController {
       const messages = [...body.messages];
       const hasSystem = messages.some((m) => m.role === 'system');
       if (!hasSystem) {
+        const modelDisplay = body.model.includes('qwen3.5')
+          ? 'Qwen3.5 397B'
+          : body.model.includes('qwen3')
+            ? 'Qwen3 32B'
+            : body.model;
         messages.unshift({
           role: 'system',
           content:
-            'You are GPT-OSS-20B, an open-source large language model developed by Plumise. ' +
-            'You run on the Plumise decentralized inference network. ' +
+            `You are a helpful AI assistant powered by ${modelDisplay}, running on the Plumise decentralized inference network. ` +
+            'Answer questions accurately and helpfully. ' +
             'Never claim to be GPT-4, ChatGPT, or any OpenAI model.',
         });
       }

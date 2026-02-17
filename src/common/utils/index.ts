@@ -14,7 +14,7 @@ export function estimateTokens(text: string): number {
 
 /**
  * Strip internal channel tokens from model output.
- * GPT-OSS-20B uses multi-channel format (analysis/commentary/final).
+ * Legacy models used multi-channel format (analysis/commentary/final).
  * Only the "final" channel content should be shown to users.
  */
 export function stripChannelTokens(content: string): string {
