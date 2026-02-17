@@ -264,7 +264,6 @@ export class OpenAICompatController {
       // Inject identity system prompt if none provided
       const messages = [...body.messages];
       const hasSystem = messages.some((m) => m.role === 'system');
-      this.logger.log(`System prompt check: hasSystem=${hasSystem}, first msg role=${messages[0]?.role}, content preview=${messages[0]?.content?.substring(0, 80)}`);
       if (!hasSystem) {
         const modelDisplay = body.model.includes('qwen3.5')
           ? 'Qwen3.5 397B'
