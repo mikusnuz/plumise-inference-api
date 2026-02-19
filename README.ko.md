@@ -1,5 +1,7 @@
 # Plumise Inference API
 
+![version](https://img.shields.io/badge/version-0.0.1-blue)
+
 **[English](README.md) | [한국어](README.ko.md)**
 
 Plumise AI 추론 게이트웨이 -- 분산 에이전트 노드 네트워크를 위한 API 게이트웨이.

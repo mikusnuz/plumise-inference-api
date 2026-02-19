@@ -1,5 +1,7 @@
 # Plumise Inference API
 
+![version](https://img.shields.io/badge/version-0.0.1-blue)
+
 **[English](README.md) | [한국어](README.ko.md)**
 
 Plumise AI Inference Gateway -- API gateway for the distributed agent node network.
